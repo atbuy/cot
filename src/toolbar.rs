@@ -27,6 +27,7 @@ pub enum Button {
     Tool(Tool),
     Undo,
     Redo,
+    Save,
     Settings,
 }
 
@@ -44,6 +45,7 @@ impl Button {
             Button::Tool(Tool::Pixelate) => "Pixelate",
             Button::Undo => "Undo (Ctrl+Z)",
             Button::Redo => "Redo (Ctrl+Y)",
+            Button::Save => "Save (Ctrl+S)",
             Button::Settings => "Settings",
         }
     }
@@ -64,7 +66,7 @@ const GROUPS: [&[Button]; 4] = [
         Button::Tool(Tool::Pixelate),
     ],
     &[Button::Undo, Button::Redo],
-    &[Button::Settings],
+    &[Button::Save, Button::Settings],
 ];
 
 /// Something clickable, for hover highlighting.
@@ -247,7 +249,7 @@ mod tests {
     #[test]
     fn every_button_is_inside_the_toolbar_and_findable() {
         let bar = place(&rect(1000, 200, 400, 300), &monitors()).unwrap();
-        assert_eq!(bar.buttons.len(), 12);
+        assert_eq!(bar.buttons.len(), 13);
         for (button, r) in &bar.buttons {
             assert!(inside(&bar.rect, r));
             assert_eq!(bar.button_at((r.x + 1, r.y + 1)), Some(*button));

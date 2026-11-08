@@ -13,6 +13,14 @@ pub enum Outcome {
     SaveSettings,
     Cancel,
     Finish(Rect),
+    Save(Rect),
+}
+
+/// What to do with the finished screenshot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Action {
+    Copy,
+    Save,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,6 +31,8 @@ pub enum Key {
     Char(char),
     Undo,
     Redo,
+    Copy,
+    Save,
 }
 
 pub struct Workspace {
@@ -143,13 +153,20 @@ impl Workspace {
         hover_changed || self.selector.is_dragging()
     }
 
-    fn activate(&mut self, button: Button) {
+    fn save(&mut self) -> Outcome {
+        self.editor.commit();
+        Outcome::Save(self.selector.confirmed())
+    }
+
+    fn activate(&mut self, button: Button) -> Outcome {
         match button {
             Button::Tool(tool) => self.editor.set_tool(tool),
             Button::Undo => self.editor.undo(),
             Button::Redo => self.editor.redo(),
+            Button::Save => return self.save(),
             Button::Settings => self.settings_open = !self.settings_open,
         }
+        Outcome::Continue
     }
 
     pub fn press(&mut self) -> Outcome {
@@ -176,8 +193,7 @@ impl Workspace {
                 }
             }
             if let Some(button) = bar.button_at(p) {
-                self.activate(button);
-                return Outcome::Continue;
+                return self.activate(button);
             }
             if bar.rect.contains(p) {
                 return Outcome::Continue;
@@ -220,6 +236,11 @@ impl Workspace {
             Key::Char(c) => self.editor.type_char(c),
             Key::Undo => self.editor.undo(),
             Key::Redo => self.editor.redo(),
+            Key::Copy => {
+                self.editor.commit();
+                return Outcome::Finish(self.selector.confirmed());
+            }
+            Key::Save => return self.save(),
         }
         Outcome::Continue
     }
@@ -409,6 +430,47 @@ mod tests {
         let mut ws = selected();
         ws.key(Key::Char('x'));
         assert!(ws.finished_shapes().is_empty());
+    }
+
+    #[test]
+    fn ctrl_s_saves_the_selection() {
+        assert_eq!(selected().key(Key::Save), Outcome::Save(SELECTION));
+    }
+
+    #[test]
+    fn the_save_button_saves_the_selection() {
+        let mut ws = selected();
+        assert_eq!(click_button(&mut ws, Button::Save), Outcome::Save(SELECTION));
+    }
+
+    #[test]
+    fn saving_includes_text_still_being_typed() {
+        let mut ws = typing();
+        assert_eq!(ws.key(Key::Save), Outcome::Save(SELECTION));
+        assert_eq!(ws.finished_shapes(), [Shape::Text { at: (150, 250), text: "hi".into() }]);
+    }
+
+    #[test]
+    fn saving_with_nothing_selected_takes_everything() {
+        let mut ws = empty(Settings::default());
+        assert_eq!(ws.key(Key::Save), Outcome::Save(Rect { x: -1440, y: 0, w: 6800, h: 2560 }));
+    }
+
+    #[test]
+    fn ctrl_c_copies_the_selection() {
+        assert_eq!(selected().key(Key::Copy), Outcome::Finish(SELECTION));
+    }
+
+    #[test]
+    fn ctrl_c_includes_text_still_being_typed() {
+        let mut ws = typing();
+        assert_eq!(ws.key(Key::Copy), Outcome::Finish(SELECTION));
+        assert_eq!(ws.finished_shapes(), [Shape::Text { at: (150, 250), text: "hi".into() }]);
+    }
+
+    #[test]
+    fn enter_still_copies() {
+        assert_eq!(selected().key(Key::Enter), Outcome::Finish(SELECTION));
     }
 
     fn hover_button(ws: &mut Workspace, button: Button) {

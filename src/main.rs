@@ -10,22 +10,26 @@ mod toolbar;
 mod workspace;
 
 use std::error::Error;
+use std::fs::{self, OpenOptions};
 use std::io::{self, ErrorKind, Write};
 use std::os::linux::net::SocketAddrExt;
 use std::os::unix::net::{SocketAddr, UnixListener};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 use std::rc::Rc;
 
 use clap::Parser;
+use gtk::glib;
 
 use crate::image::Image;
+use crate::workspace::Action;
 
 /// Freezes the screen, then lets you pick what to keep.
 ///
 /// Drag to select a region, or click to select a whole monitor. Adjust it and
-/// annotate it from the toolbar, then press Enter to copy it to the clipboard.
-/// With nothing selected, Enter takes all monitors. Esc or right-click cancels.
+/// annotate it from the toolbar, then press Enter or Ctrl+C to copy it to the
+/// clipboard, or Ctrl+S to save it to ~/Pictures/Screenshots. With nothing selected, these
+/// take all monitors. Esc or right-click cancels.
 #[derive(Parser)]
 #[command(version)]
 struct Args {
@@ -37,7 +41,7 @@ struct Args {
     #[arg(short, long)]
     cursor: bool,
 
-    /// Write a PNG to this path instead of the clipboard
+    /// Write the PNG to this path instead of the clipboard or screenshots folder
     #[arg(short, long, value_name = "PATH")]
     output: Option<PathBuf>,
 }
@@ -72,28 +76,62 @@ fn copy_to_clipboard(png: &[u8]) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// Writes a new file named after `stem`, adding a number if that name is taken.
+fn write_new_file(dir: &Path, stem: &str, bytes: &[u8]) -> io::Result<PathBuf> {
+    fs::create_dir_all(dir)?;
+    let mut attempt = 0;
+    loop {
+        let name = match attempt {
+            0 => format!("{stem}.png"),
+            n => format!("{stem}-{n}.png"),
+        };
+        let path = dir.join(name);
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut file) => {
+                file.write_all(bytes)?;
+                return Ok(path);
+            }
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => attempt += 1,
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+fn save_screenshot(png: &[u8]) -> Result<(), Box<dyn Error>> {
+    let home = std::env::var_os("HOME").ok_or("HOME is not set")?;
+    let dir = PathBuf::from(home).join("Pictures").join("Screenshots");
+    let stamp = glib::DateTime::now_local()?.format("%Y-%m-%d_%H-%M-%S")?;
+    write_new_file(&dir, &format!("cot-{stamp}"), png)
+        .map_err(|e| format!("could not save to {}: {e}", dir.display()))?;
+    Ok(())
+}
+
 fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let Some(_lock) = acquire_instance_lock()? else {
         return Ok(());
     };
 
     let frame = Rc::new(Image::capture(args.cursor)?);
+    let mut action = Action::Copy;
     let result = if args.full {
         frame
     } else {
-        let Some(capture) = overlay::select_region(frame.clone())? else {
+        let Some((capture, chosen)) = overlay::select_region(frame.clone())? else {
             return Ok(());
         };
+        action = chosen;
         let mut cropped = frame.crop(&capture.region).ok_or("the selected region is empty")?;
         render::flatten(&mut cropped, &capture, &frame)?;
         Rc::new(cropped)
     };
 
     let png = result.to_png()?;
-    match args.output {
-        Some(path) => std::fs::write(&path, png)
-            .map_err(|e| format!("could not write {}: {e}", path.display()))?,
-        None => copy_to_clipboard(&png)?,
+    match (args.output, action) {
+        (Some(path), _) => {
+            fs::write(&path, png).map_err(|e| format!("could not write {}: {e}", path.display()))?
+        }
+        (None, Action::Copy) => copy_to_clipboard(&png)?,
+        (None, Action::Save) => save_screenshot(&png)?,
     }
     Ok(())
 }
@@ -105,5 +143,45 @@ fn main() -> ExitCode {
             eprintln!("cot: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A folder for one test, removed when the test ends.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(name: &str) -> Self {
+            TempDir(std::env::temp_dir().join(format!("cot-test-{}-{name}", std::process::id())))
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn creates_missing_folders() {
+        let temp = TempDir::new("create");
+        let dir = temp.0.join("Pictures").join("Screenshots");
+        let path = write_new_file(&dir, "shot", b"one").unwrap();
+        assert_eq!(path, dir.join("shot.png"));
+        assert_eq!(fs::read(path).unwrap(), b"one");
+    }
+
+    #[test]
+    fn never_overwrites_an_existing_file() {
+        let temp = TempDir::new("collide");
+        let first = write_new_file(&temp.0, "shot", b"one").unwrap();
+        let second = write_new_file(&temp.0, "shot", b"two").unwrap();
+        let third = write_new_file(&temp.0, "shot", b"three").unwrap();
+        assert_eq!(second, temp.0.join("shot-1.png"));
+        assert_eq!(third, temp.0.join("shot-2.png"));
+        assert_eq!(fs::read(first).unwrap(), b"one");
     }
 }

@@ -310,6 +310,16 @@ fn trace_icon(cr: &cairo::Context, button: Button) -> Drawn {
             cr.stroke()?;
             cr.restore()?;
         }
+        Button::Save => {
+            segment(0.0, -9.0, 0.0, 4.0);
+            segment(-5.0, -1.0, 0.0, 4.0);
+            segment(5.0, -1.0, 0.0, 4.0);
+            cr.stroke()?;
+            cr.move_to(-9.0, 4.0);
+            cr.line_to(-9.0, 9.0);
+            cr.line_to(9.0, 9.0);
+            cr.line_to(9.0, 4.0);
+        }
         Button::Settings => {
             for (y, knob) in [(-6.0, 3.0), (0.0, -3.0), (6.0, 2.0)] {
                 segment(-9.0, y, 9.0, y);

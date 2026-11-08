@@ -20,11 +20,13 @@ use crate::palette;
 use crate::render::{self, BarState, Capture};
 use crate::settings::Settings;
 use crate::toolbar::Button;
-use crate::workspace::{Key, Outcome, Workspace};
+use crate::workspace::{Action, Key, Outcome, Workspace};
 
-/// Physical keys for undo and redo, so they work on non-Latin layouts too.
+/// Physical keys for shortcuts, so they work on non-Latin layouts too.
 const KEYCODE_Z: u32 = 52;
 const KEYCODE_Y: u32 = 29;
+const KEYCODE_S: u32 = 39;
+const KEYCODE_C: u32 = 54;
 const TOOLTIP_DELAY: Duration = Duration::from_millis(500);
 
 const fn rgb(hex: u32) -> RGBA {
@@ -51,7 +53,7 @@ pub struct Session {
     workspace: RefCell<Workspace>,
     cursor: Cell<&'static str>,
     tooltip_timer: RefCell<Option<(Button, glib::SourceId)>>,
-    result: Cell<Option<Rect>>,
+    result: Cell<Option<(Rect, Action)>>,
 }
 
 impl Session {
@@ -123,11 +125,12 @@ impl Session {
                 }
             }
             Outcome::Cancel => self.finish(None),
-            Outcome::Finish(rect) => self.finish(Some(rect)),
+            Outcome::Finish(rect) => self.finish(Some((rect, Action::Copy))),
+            Outcome::Save(rect) => self.finish(Some((rect, Action::Save))),
         }
     }
 
-    fn finish(&self, result: Option<Rect>) {
+    fn finish(&self, result: Option<(Rect, Action)>) {
         self.result.set(result);
         self.app.quit();
     }
@@ -365,7 +368,7 @@ glib::wrapper! {
 
 /// Shows the frozen frame and blocks until the user has chosen. Returns the
 /// region in image pixels, or `None` if they cancelled.
-pub fn select_region(frame: Rc<Image>) -> Result<Option<Capture>, String> {
+pub fn select_region(frame: Rc<Image>) -> Result<Option<(Capture, Action)>, String> {
     gtk::init().map_err(|e| format!("could not initialize GTK: {e}"))?;
     let display = gdk::Display::default().ok_or("no display")?;
     let monitors: Vec<gdk::Monitor> = display
@@ -416,11 +419,14 @@ pub fn select_region(frame: Rc<Image>) -> Result<Option<Capture>, String> {
     // Our arguments were already handled by clap; GTK must not see them.
     app.run_with_args::<&str>(&[]);
 
-    Ok(session.result.get().map(|rect| Capture {
-        region: to_image_pixels(&rect, &bounds, frame.width),
-        shapes: session.workspace.borrow().finished_shapes(),
-        bounds,
-        scale: f64::from(frame.width) / f64::from(bounds.w),
+    Ok(session.result.get().map(|(rect, action)| {
+        let capture = Capture {
+            region: to_image_pixels(&rect, &bounds, frame.width),
+            shapes: session.workspace.borrow().finished_shapes(),
+            bounds,
+            scale: f64::from(frame.width) / f64::from(bounds.w),
+        };
+        (capture, action)
     }))
 }
 
@@ -525,6 +531,8 @@ fn key_controller(session: Rc<Session>) -> EventControllerKey {
                 }
             }
             _ if ctrl && keycode == KEYCODE_Y => Key::Redo,
+            _ if ctrl && keycode == KEYCODE_S => Key::Save,
+            _ if ctrl && keycode == KEYCODE_C => Key::Copy,
             _ if ctrl || alt => return glib::Propagation::Proceed,
             _ => match key.to_unicode() {
                 Some(c) if !c.is_control() => Key::Char(c),
