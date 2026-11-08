@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use toml_edit::{DocumentMut, Item, Value};
 
-use crate::palette::{self, Palette};
+use crate::palette::{self, Overrides, Palette};
 
 /// What happens when the mouse is released after drawing a new selection.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -31,6 +31,8 @@ pub struct Settings {
     pub after_select: AfterSelect,
     /// Whether to show the magnifier while drawing or resizing a selection.
     pub magnifier: bool,
+    /// `None` if the file names no valid theme, which saving then leaves alone.
+    pub theme: Option<&'static str>,
 }
 
 impl Default for Settings {
@@ -38,6 +40,7 @@ impl Default for Settings {
         Settings {
             after_select: AfterSelect::default(),
             magnifier: true,
+            theme: None,
         }
     }
 }
@@ -46,7 +49,9 @@ impl Default for Settings {
 #[derive(Debug, PartialEq, Eq)]
 pub struct Config {
     pub settings: Settings,
+    /// The theme with `overrides` applied.
     pub palette: Palette,
+    pub overrides: Overrides,
     /// `None` only if no folder is configured and `HOME` is not set.
     pub save_folder: Option<PathBuf>,
 }
@@ -80,6 +85,7 @@ impl Config {
         let mut config = Config {
             settings: Settings::default(),
             palette: Palette::default(),
+            overrides: Overrides::default(),
             save_folder: default_save_folder(home),
         };
         let mut warnings = Vec::new();
@@ -93,8 +99,11 @@ impl Config {
 
         // Read first, so [colors] overrides it wherever each appears in the file.
         if let Some(item) = doc.get("theme") {
-            match item.as_str().and_then(palette::theme) {
-                Some(theme) => config.palette = theme,
+            match item.as_str().and_then(palette::named) {
+                Some((name, theme)) => {
+                    config.settings.theme = Some(name);
+                    config.palette = theme;
+                }
                 None => warnings.push(format!("theme must be one of: {}", palette::theme_names())),
             }
         }
@@ -116,10 +125,11 @@ impl Config {
                     None => invalid("an absolute path or one starting with ~/"),
                 },
                 "theme" => {}
-                "colors" => read_colors(item, &mut config.palette, &mut warnings),
+                "colors" => read_colors(item, &mut config.overrides, &mut warnings),
                 _ => warnings.push(format!("unknown setting {key}")),
             }
         }
+        config.palette = config.overrides.apply(config.palette);
         (config, warnings)
     }
 
@@ -134,24 +144,24 @@ impl Config {
     }
 }
 
-fn read_colors(item: &Item, palette: &mut Palette, warnings: &mut Vec<String>) {
+fn read_colors(item: &Item, overrides: &mut Overrides, warnings: &mut Vec<String>) {
     let Some(table) = item.as_table_like() else {
         warnings.push("colors must be a table".into());
         return;
     };
     for (key, value) in table.iter() {
         let slot = match key {
-            "selection" => &mut palette.selection,
-            "surface" => &mut palette.surface,
-            "text" => &mut palette.text,
-            "annotation" => &mut palette.annotation,
+            "selection" => &mut overrides.selection,
+            "surface" => &mut overrides.surface,
+            "text" => &mut overrides.text,
+            "annotation" => &mut overrides.annotation,
             _ => {
                 warnings.push(format!("unknown color {key}"));
                 continue;
             }
         };
         match value.as_str().and_then(palette::parse_hex) {
-            Some(color) => *slot = color,
+            Some(color) => *slot = Some(color),
             None => warnings.push(format!("colors.{key} must look like \"#RRGGBB\"")),
         }
     }
@@ -176,6 +186,9 @@ impl Settings {
         let mut doc = text.parse::<DocumentMut>()?;
         set_value(&mut doc, "after_select", self.after_select.as_str());
         set_value(&mut doc, "magnifier", self.magnifier);
+        if let Some(theme) = self.theme {
+            set_value(&mut doc, "theme", theme);
+        }
         Ok(doc.to_string())
     }
 
@@ -235,7 +248,7 @@ mod tests {
             "##,
         );
         assert!(warnings.is_empty(), "{warnings:?}");
-        assert_eq!(config.settings, Settings { after_select: AfterSelect::Instant, magnifier: false });
+        assert_eq!(config.settings, Settings { after_select: AfterSelect::Instant, magnifier: false, theme: None });
         assert_eq!(config.save_folder, Some(PathBuf::from("/home/me/shots")));
         assert_eq!(
             config.palette,
@@ -283,6 +296,24 @@ mod tests {
     fn saving_keeps_the_theme() {
         let merged = Settings::default().merged_into("theme = \"ultraviolet\"\n").unwrap();
         assert!(merged.contains("theme = \"ultraviolet\""));
+    }
+
+    #[test]
+    fn a_chosen_theme_replaces_the_old_one_and_keeps_colors() {
+        let settings = Settings { theme: Some("graphite-mono"), ..Settings::default() };
+        let original = "theme = \"ultraviolet\" # mine\n[colors]\nselection = \"#112233\"\n";
+        let merged = settings.merged_into(original).unwrap();
+        assert!(merged.contains("theme = \"graphite-mono\" # mine"), "{merged}");
+        let (config, warnings) = parse(&merged);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(config.palette, Palette { selection: 0x112233, ..palette::theme("graphite-mono").unwrap() });
+    }
+
+    #[test]
+    fn saving_leaves_an_unknown_theme_for_the_user_to_fix() {
+        let (config, _) = parse("theme = \"sparkle\"\n");
+        let merged = config.settings.merged_into("theme = \"sparkle\"\n").unwrap();
+        assert!(merged.contains("theme = \"sparkle\""));
     }
 
     #[test]
@@ -343,7 +374,7 @@ mod tests {
     fn saved_settings_round_trip() {
         for after_select in [AfterSelect::Edit, AfterSelect::Instant] {
             for magnifier in [true, false] {
-                let settings = Settings { after_select, magnifier };
+                let settings = Settings { after_select, magnifier, theme: Some("ultraviolet") };
                 let text = settings.merged_into("").unwrap();
                 assert_eq!(parse(&text).0.settings, settings);
             }
@@ -353,7 +384,7 @@ mod tests {
     #[test]
     fn saving_keeps_comments_and_other_settings() {
         let original = "# my screenshots\nmagnifier = true # keep this on\nsave_folder = \"~/shots\"\n\n[colors]\n# brand red\nselection = \"#112233\"\n";
-        let settings = Settings { after_select: AfterSelect::Instant, magnifier: false };
+        let settings = Settings { after_select: AfterSelect::Instant, magnifier: false, theme: None };
         let merged = settings.merged_into(original).unwrap();
         assert!(merged.contains("# my screenshots"));
         assert!(merged.contains("magnifier = false # keep this on"), "{merged}");

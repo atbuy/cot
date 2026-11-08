@@ -4,6 +4,7 @@
 use crate::editor::{Editor, Shape, Tool};
 use crate::geometry::Rect;
 use crate::magnifier::Magnifier;
+use crate::palette::{self, Overrides, Palette};
 use crate::selection::Selector;
 use crate::settings::{AfterSelect, Settings};
 use crate::toolbar::{self, Button, Hover, Toolbar};
@@ -40,6 +41,7 @@ pub struct Workspace {
     selector: Selector,
     editor: Editor,
     settings: Settings,
+    overrides: Overrides,
     monitors: Vec<Rect>,
     settings_open: bool,
     hover: Option<Hover>,
@@ -50,11 +52,12 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    pub fn new(monitors: Vec<Rect>, windows: Vec<Rect>, bounds: Rect, settings: Settings) -> Self {
+    pub fn new(monitors: Vec<Rect>, windows: Vec<Rect>, bounds: Rect, settings: Settings, overrides: Overrides) -> Self {
         Workspace {
             selector: Selector::new(monitors.clone(), windows, bounds),
             editor: Editor::new(),
             settings,
+            overrides,
             monitors,
             settings_open: false,
             hover: None,
@@ -94,6 +97,28 @@ impl Workspace {
 
     pub fn settings(&self) -> &Settings {
         &self.settings
+    }
+
+    pub fn overrides(&self) -> Overrides {
+        self.overrides
+    }
+
+    fn palette_of(&self, theme: Option<&str>) -> Palette {
+        self.overrides.apply(theme.and_then(palette::theme).unwrap_or_default())
+    }
+
+    /// The colors of the chosen theme: what the finished image must use.
+    pub fn chosen_palette(&self) -> Palette {
+        self.palette_of(self.settings.theme)
+    }
+
+    /// The colors to draw with, which is the theme under the pointer while
+    /// the settings panel is open.
+    pub fn palette(&self) -> Palette {
+        match self.hover {
+            Some(Hover::Theme(theme)) if self.settings_open => self.palette_of(Some(theme)),
+            _ => self.chosen_palette(),
+        }
     }
 
     pub fn settings_open(&self) -> bool {
@@ -159,6 +184,9 @@ impl Workspace {
             if panel.magnifier_toggle.contains(p) {
                 return Some(Hover::MagnifierToggle);
             }
+            if let Some(theme) = panel.theme_at(p) {
+                return Some(Hover::Theme(theme));
+            }
         }
         bar.button_at(p).map(Hover::Button)
     }
@@ -213,6 +241,13 @@ impl Workspace {
                 let panel = bar.panel();
                 if panel.magnifier_toggle.contains(p) {
                     self.settings.magnifier = !self.settings.magnifier;
+                    return Outcome::SaveSettings;
+                }
+                if let Some(theme) = panel.theme_at(p) {
+                    if self.settings.theme == Some(theme) {
+                        return Outcome::Continue;
+                    }
+                    self.settings.theme = Some(theme);
                     return Outcome::SaveSettings;
                 }
                 if panel.rect.contains(p) {
@@ -318,13 +353,17 @@ mod tests {
     const HDMI: Rect = Rect { x: 3440, y: 0, w: 1920, h: 1080 };
 
     fn empty(settings: Settings) -> Workspace {
+        empty_with(settings, Overrides::default())
+    }
+
+    fn empty_with(settings: Settings, overrides: Overrides) -> Workspace {
         let monitors = vec![
             Rect { x: -1440, y: 0, w: 1440, h: 2560 },
             Rect { x: 0, y: 0, w: 3440, h: 1440 },
             Rect { x: 3440, y: 0, w: 1920, h: 1080 },
         ];
         let bounds = Rect { x: -1440, y: 0, w: 6800, h: 2560 };
-        Workspace::new(monitors, vec![WINDOW], bounds, settings)
+        Workspace::new(monitors, vec![WINDOW], bounds, settings, overrides)
     }
 
     fn drag(ws: &mut Workspace, from: (i32, i32), to: (i32, i32), shift: bool) -> Outcome {
@@ -335,7 +374,11 @@ mod tests {
     }
 
     fn selected() -> Workspace {
-        let mut ws = empty(Settings::default());
+        selected_with(Overrides::default())
+    }
+
+    fn selected_with(overrides: Overrides) -> Workspace {
+        let mut ws = empty_with(Settings::default(), overrides);
         drag(&mut ws, (100, 200), (400, 500), false);
         ws
     }
@@ -703,6 +746,72 @@ mod tests {
         assert_eq!(click_option(&mut ws, AfterSelect::Instant), Outcome::SaveSettings);
         assert_eq!(ws.settings().after_select, AfterSelect::Instant);
         assert_eq!(click_option(&mut ws, AfterSelect::Instant), Outcome::Continue);
+    }
+
+    fn hover_theme(ws: &mut Workspace, wanted: &str) {
+        let panel = ws.toolbar().unwrap().panel();
+        let (_, _, r) = *panel.themes.iter().find(|(name, _, _)| *name == wanted).unwrap();
+        ws.pointer_moved((r.x + 2, r.y + 2));
+    }
+
+    fn click_theme(ws: &mut Workspace, wanted: &str) -> Outcome {
+        hover_theme(ws, wanted);
+        let outcome = ws.press();
+        ws.release(false);
+        outcome
+    }
+
+    fn theme(name: &str) -> Palette {
+        palette::theme(name).unwrap()
+    }
+
+    #[test]
+    fn hovering_a_theme_previews_it_without_choosing_it() {
+        let mut ws = selected();
+        click_button(&mut ws, Button::Settings);
+        hover_theme(&mut ws, "ultraviolet");
+        assert_eq!(ws.hover(), Some(Hover::Theme("ultraviolet")));
+        assert_eq!(ws.palette(), theme("ultraviolet"));
+        assert_eq!(ws.chosen_palette(), Palette::default());
+        assert_eq!(ws.settings().theme, None);
+    }
+
+    #[test]
+    fn moving_off_a_theme_ends_the_preview() {
+        let mut ws = selected();
+        click_button(&mut ws, Button::Settings);
+        hover_theme(&mut ws, "ultraviolet");
+        ws.pointer_moved((5, 5));
+        assert_eq!(ws.palette(), Palette::default());
+    }
+
+    #[test]
+    fn closing_the_panel_ends_the_preview_without_moving() {
+        let mut ws = selected();
+        click_button(&mut ws, Button::Settings);
+        hover_theme(&mut ws, "ultraviolet");
+        ws.key(Key::Escape);
+        assert_eq!(ws.palette(), Palette::default());
+    }
+
+    #[test]
+    fn clicking_a_theme_chooses_it_and_asks_to_save() {
+        let mut ws = selected();
+        click_button(&mut ws, Button::Settings);
+        assert_eq!(click_theme(&mut ws, "graphite-mono"), Outcome::SaveSettings);
+        assert_eq!(ws.settings().theme, Some("graphite-mono"));
+        assert_eq!(ws.chosen_palette(), theme("graphite-mono"));
+        assert!(ws.settings_open());
+        assert_eq!(click_theme(&mut ws, "graphite-mono"), Outcome::Continue);
+    }
+
+    #[test]
+    fn config_colors_stay_on_top_of_a_previewed_theme() {
+        let overrides = Overrides { selection: Some(0x112233), ..Overrides::default() };
+        let mut ws = selected_with(overrides);
+        click_button(&mut ws, Button::Settings);
+        hover_theme(&mut ws, "ultraviolet");
+        assert_eq!(ws.palette(), Palette { selection: 0x112233, ..theme("ultraviolet") });
     }
 
     #[test]

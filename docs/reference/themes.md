@@ -1,6 +1,6 @@
 # Themes
 
-Choose a theme in the [config file](configuration.md):
+Choose a theme in the [settings panel](../guide/annotating.md#settings), where hovering over one previews it, or in the [config file](configuration.md):
 
 ```toml
 theme = "graphite-mono"
@@ -68,4 +68,4 @@ selection = "#FF8800"
 
 This gives you Ultraviolet with an orange selection. The keys are listed in the [configuration reference](configuration.md#colors).
 
-The order in the file doesn't matter. `[colors]` always applies on top of the theme.
+The order in the file doesn't matter. `[colors]` always applies on top of the theme, including in the settings panel, so its swatches and previews show your overrides too.

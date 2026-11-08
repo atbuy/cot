@@ -2,12 +2,15 @@ PREFIX ?= $(HOME)/.local
 BINDIR ?= $(PREFIX)/bin
 ZENSICAL ?= zensical
 
-.PHONY: all build install uninstall clean docs-build docs-serve
+.PHONY: all build lock install uninstall clean docs-build docs-serve
 
 all: build
 
 build:
 	cargo build --release --locked
+
+lock:
+	cargo update
 
 install: build
 	install -Dm755 target/release/cot $(DESTDIR)$(BINDIR)/cot

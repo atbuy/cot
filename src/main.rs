@@ -161,7 +161,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let result = if args.full {
         frame
     } else {
-        let Some((capture, chosen)) = overlay::select_region(frame.clone(), config.settings, backend)? else {
+        let Some((capture, chosen)) = overlay::select_region(frame.clone(), config.settings, config.overrides, backend)? else {
             return Ok(());
         };
         action = chosen;

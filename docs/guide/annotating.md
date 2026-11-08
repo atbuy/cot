@@ -25,7 +25,7 @@ Drawing only starts inside the selection. To change the selection again, click *
 
 Annotations stay where you drew them on the frozen screen. Moving the selection reframes around them, and only the part inside the selection ends up in the image.
 
-All annotations use the theme's annotation color, which you can change in the [configuration](../reference/configuration.md#colors).
+All annotations use the theme's annotation color, which you can change with a [theme](#settings) or in the [configuration](../reference/configuration.md#colors).
 
 ## Text
 
@@ -63,4 +63,6 @@ The last toolbar button opens the settings panel.
 
 **Show magnifier while selecting** turns the [magnifier](selecting.md#the-magnifier) on or off.
 
-Both are remembered between runs in the [config file](../reference/configuration.md).
+**Theme** lists the built-in [themes](../reference/themes.md), each with its selection, surface, text and annotation colors. Hover over one to preview it on the toolbar, the selection and your annotations, then click to keep it. Moving away without clicking goes back to the theme you had.
+
+These are all remembered between runs in the [config file](../reference/configuration.md).

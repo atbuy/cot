@@ -1,6 +1,6 @@
 [package]
 name = "cot"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 description = "Screenshot tool for Wayland and X11 that freezes the screen before you select a region"
 

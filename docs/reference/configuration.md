@@ -28,6 +28,8 @@ selection = "#FF8800"
 
 The built-in color theme. See [Themes](themes.md) for the list. Default: `"hot-coral"`.
 
+Also available in the [settings panel](../guide/annotating.md#settings), with a preview.
+
 ### `after_select`
 
 What happens when you finish a new selection. Default: `"edit"`.

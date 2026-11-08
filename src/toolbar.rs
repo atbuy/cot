@@ -2,6 +2,7 @@
 
 use crate::editor::Tool;
 use crate::geometry::Rect;
+use crate::palette::{self, Palette};
 use crate::settings::AfterSelect;
 
 const BUTTON: i32 = 36;
@@ -22,6 +23,7 @@ const PANEL_WIDTH: i32 = 320;
 const PANEL_TITLE: i32 = 30;
 const PANEL_ROW: i32 = 38;
 const PANEL_SECTION_GAP: i32 = 8;
+const PANEL_THEME_ROW: i32 = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Button {
@@ -76,6 +78,7 @@ pub enum Hover {
     Button(Button),
     Option(AfterSelect),
     MagnifierToggle,
+    Theme(&'static str),
 }
 
 pub struct Toolbar {
@@ -88,6 +91,7 @@ pub struct SettingsPanel {
     pub rect: Rect,
     pub options: [(AfterSelect, &'static str, Rect); 2],
     pub magnifier_toggle: Rect,
+    pub themes: Vec<(&'static str, Palette, Rect)>,
 }
 
 /// Places the toolbar on the monitor holding most of the selection: below the
@@ -159,7 +163,8 @@ impl Toolbar {
 
     /// The settings panel, on whichever side of the toolbar has room.
     pub fn panel(&self) -> SettingsPanel {
-        let h = 2 * PAD + PANEL_TITLE + 3 * PANEL_ROW + PANEL_SECTION_GAP;
+        let themes_top = PAD + PANEL_TITLE + 3 * PANEL_ROW + 2 * PANEL_SECTION_GAP + PANEL_TITLE;
+        let h = themes_top + palette::THEMES.len() as i32 * PANEL_THEME_ROW + PAD;
         let x = (self.rect.right() - PANEL_WIDTH)
             .min(self.monitor.right() - PANEL_WIDTH - SCREEN_MARGIN)
             .max(self.monitor.x + SCREEN_MARGIN);
@@ -167,7 +172,7 @@ impl Toolbar {
         let y = if above >= self.monitor.y + SCREEN_MARGIN {
             above
         } else {
-            self.rect.bottom() + PAD
+            (self.rect.bottom() + PAD).min(self.monitor.bottom() - h - SCREEN_MARGIN).max(self.monitor.y + SCREEN_MARGIN)
         };
         let row = |index: i32| Rect {
             x: x + PAD,
@@ -182,6 +187,14 @@ impl Toolbar {
                 (AfterSelect::Instant, "Copy right away, Shift to edit", row(1)),
             ],
             magnifier_toggle: Rect { y: row(2).y + PANEL_SECTION_GAP, ..row(2) },
+            themes: palette::THEMES
+                .iter()
+                .zip(0..)
+                .map(|((name, colors), index)| {
+                    let r = Rect { y: y + themes_top + index * PANEL_THEME_ROW, h: PANEL_THEME_ROW, ..row(0) };
+                    (*name, *colors, r)
+                })
+                .collect(),
         }
     }
 }
@@ -189,9 +202,14 @@ impl Toolbar {
 impl SettingsPanel {
     pub const TITLE: &'static str = "After selecting";
     pub const MAGNIFIER_LABEL: &'static str = "Show magnifier while selecting";
+    pub const THEME_TITLE: &'static str = "Theme";
 
     pub fn option_at(&self, p: (i32, i32)) -> Option<AfterSelect> {
         self.options.iter().find(|(_, _, r)| r.contains(p)).map(|(o, _, _)| *o)
+    }
+
+    pub fn theme_at(&self, p: (i32, i32)) -> Option<&'static str> {
+        self.themes.iter().find(|(_, _, r)| r.contains(p)).map(|(name, _, _)| *name)
     }
 }
 
@@ -298,5 +316,10 @@ mod tests {
             assert!(r.intersect(&panel.magnifier_toggle).is_none());
         }
         assert!(inside(&panel.rect, &panel.magnifier_toggle));
+        for (name, _, r) in &panel.themes {
+            assert!(inside(&panel.rect, r));
+            assert_eq!(panel.theme_at((r.x + 1, r.y + 1)), Some(*name));
+            assert!(r.intersect(&panel.magnifier_toggle).is_none());
+        }
     }
 }

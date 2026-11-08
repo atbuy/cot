@@ -18,7 +18,7 @@ use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use crate::backend::Backend;
 use crate::geometry::{to_image_pixels, Rect};
 use crate::image::{Effect, Image};
-use crate::palette;
+use crate::palette::{self, Overrides};
 use crate::render::{self, BarState, Capture};
 use crate::settings::Settings;
 use crate::toolbar::Button;
@@ -76,6 +76,7 @@ impl Session {
     }
 
     fn redraw(&self) {
+        palette::set(self.workspace.borrow().palette());
         for view in self.views.borrow().iter() {
             view.queue_draw();
         }
@@ -299,6 +300,8 @@ mod imp {
                 hover: workspace.hover(),
                 after_select: workspace.settings().after_select,
                 magnifier: workspace.settings().magnifier,
+                theme: workspace.settings().theme,
+                overrides: workspace.overrides(),
             };
             let cr = global_cairo(snapshot, &bar.rect, monitor);
             if let Err(e) = render::draw_toolbar(&cr, &bar, &state) {
@@ -387,7 +390,7 @@ glib::wrapper! {
 
 /// Shows the frozen frame and blocks until the user has chosen. Returns the
 /// region in image pixels, or `None` if they cancelled.
-pub fn select_region(frame: Rc<Image>, settings: Settings, backend: Backend) -> Result<Option<(Capture, Action)>, String> {
+pub fn select_region(frame: Rc<Image>, settings: Settings, overrides: Overrides, backend: Backend) -> Result<Option<(Capture, Action)>, String> {
     gtk::init().map_err(|e| format!("could not initialize GTK: {e}"))?;
     let display = gdk::Display::default().ok_or("no display")?;
     let monitors: Vec<gdk::Monitor> = display
@@ -424,7 +427,7 @@ pub fn select_region(frame: Rc<Image>, settings: Settings, backend: Backend) -> 
         bounds,
         effects: RefCell::default(),
         views: RefCell::default(),
-        workspace: RefCell::new(Workspace::new(rects, windows::on_screen(backend, scale), bounds, settings)),
+        workspace: RefCell::new(Workspace::new(rects, windows::on_screen(backend, scale), bounds, settings, overrides)),
         cursor: Cell::new("crosshair"),
         tooltip_timer: RefCell::new(None),
         result: Cell::new(None),
@@ -454,6 +457,9 @@ pub fn select_region(frame: Rc<Image>, settings: Settings, backend: Backend) -> 
     }
     // Our arguments were already handled by clap; GTK must not see them.
     app.run_with_args::<&str>(&[]);
+
+    // The window may have closed mid-preview, and the image is drawn next.
+    palette::set(session.workspace.borrow().chosen_palette());
 
     Ok(session.result.get().map(|(rect, action)| {
         let capture = Capture {

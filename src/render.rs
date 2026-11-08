@@ -10,7 +10,7 @@ use crate::editor::{Shape, Tool};
 use crate::geometry::{to_image_pixels, Rect};
 use crate::image::Image;
 use crate::magnifier::{self, Magnifier};
-use crate::palette;
+use crate::palette::{self, Overrides, Palette};
 use crate::settings::AfterSelect;
 use crate::toolbar::{Button, Hover, SettingsPanel, Toolbar, TOOLTIP_PAD_X};
 
@@ -204,6 +204,8 @@ pub fn flatten(image: &mut Image, capture: &Capture, frame: &Image) -> Result<()
     Ok(())
 }
 
+const PANEL_RADIO: f64 = 7.0;
+
 /// What the toolbar should show.
 pub struct BarState {
     pub tool: Tool,
@@ -213,6 +215,8 @@ pub struct BarState {
     pub hover: Option<Hover>,
     pub after_select: AfterSelect,
     pub magnifier: bool,
+    pub theme: Option<&'static str>,
+    pub overrides: Overrides,
 }
 
 fn fill_rect(cr: &cairo::Context, r: &Rect, hex: u32, alpha: f64) -> Drawn {
@@ -392,7 +396,7 @@ pub fn draw_tooltip(cr: &cairo::Context, rect: &Rect, text: &str) -> Drawn {
 /// Draws the settings panel in global logical coordinates.
 pub fn draw_settings(cr: &cairo::Context, panel: &SettingsPanel, state: &BarState) -> Drawn {
     const INDENT: f64 = 10.0;
-    const RADIO: f64 = 7.0;
+    const RADIO: f64 = PANEL_RADIO;
     draw_chrome(cr, &panel.rect)?;
     let first_row = panel.options[0].2;
     draw_label(
@@ -409,16 +413,7 @@ pub fn draw_settings(cr: &cairo::Context, panel: &SettingsPanel, state: &BarStat
         }
         let center_y = f64::from(r.y) + f64::from(r.h) / 2.0;
         let radio_x = f64::from(r.x) + INDENT + RADIO;
-        set_color(cr, palette::active().selection, 1.0);
-        cr.set_line_width(1.8);
-        // Drawing the previous label left a current point the arc would join.
-        cr.new_path();
-        cr.arc(radio_x, center_y, RADIO, 0.0, TAU);
-        cr.stroke()?;
-        if *option == state.after_select {
-            cr.arc(radio_x, center_y, RADIO - 3.5, 0.0, TAU);
-            cr.fill()?;
-        }
+        draw_radio(cr, radio_x, center_y, *option == state.after_select)?;
         draw_label(cr, label, radio_x + RADIO + INDENT, center_y, palette::active().text, 1.0)?;
     }
 
@@ -438,7 +433,64 @@ pub fn draw_settings(cr: &cairo::Context, panel: &SettingsPanel, state: &BarStat
         cr.rectangle(box_x + 3.5, center_y - RADIO + 3.5, side - 7.0, side - 7.0);
         cr.fill()?;
     }
-    draw_label(cr, SettingsPanel::MAGNIFIER_LABEL, box_x + side + INDENT, center_y, palette::active().text, 1.0)
+    draw_label(cr, SettingsPanel::MAGNIFIER_LABEL, box_x + side + INDENT, center_y, palette::active().text, 1.0)?;
+
+    let first_theme = panel.themes[0].2;
+    draw_label(
+        cr,
+        SettingsPanel::THEME_TITLE,
+        f64::from(first_theme.x) + INDENT,
+        f64::from(first_theme.y) - 14.0,
+        palette::active().text,
+        0.65,
+    )?;
+    let chosen = state.theme.unwrap_or(palette::DEFAULT_THEME);
+    for (name, colors, r) in &panel.themes {
+        if state.hover == Some(Hover::Theme(name)) {
+            fill_rect(cr, r, palette::active().text, HOVER_ALPHA)?;
+        }
+        let center_y = f64::from(r.y) + f64::from(r.h) / 2.0;
+        let radio_x = f64::from(r.x) + INDENT + RADIO;
+        draw_radio(cr, radio_x, center_y, *name == chosen)?;
+        draw_label(cr, &palette::label(name), radio_x + RADIO + INDENT, center_y, palette::active().text, 1.0)?;
+        draw_swatches(cr, r, state.overrides.apply(*colors))?;
+    }
+    Ok(())
+}
+
+fn draw_radio(cr: &cairo::Context, x: f64, y: f64, selected: bool) -> Drawn {
+    set_color(cr, palette::active().selection, 1.0);
+    cr.set_line_width(1.8);
+    // Drawing the previous label left a current point the arc would join.
+    cr.new_path();
+    cr.arc(x, y, PANEL_RADIO, 0.0, TAU);
+    cr.stroke()?;
+    if selected {
+        cr.arc(x, y, PANEL_RADIO - 3.5, 0.0, TAU);
+        cr.fill()?;
+    }
+    Ok(())
+}
+
+/// One square per color of the theme, against the right edge of its row.
+fn draw_swatches(cr: &cairo::Context, row: &Rect, colors: Palette) -> Drawn {
+    const SIDE: i32 = 18;
+    const GAP: i32 = 4;
+    const MARGIN: i32 = 10;
+    let swatches = [colors.selection, colors.surface, colors.text, colors.annotation];
+    let total = swatches.len() as i32 * (SIDE + GAP) - GAP;
+    let y = row.y + (row.h - SIDE) / 2;
+    for (index, hex) in (0..).zip(swatches) {
+        let swatch = Rect { x: row.right() - MARGIN - total + index * (SIDE + GAP), y, w: SIDE, h: SIDE };
+        cr.new_path();
+        fill_rect(cr, &swatch, hex, 1.0)?;
+        // Keeps a swatch visible when it matches the panel behind it.
+        set_color(cr, palette::active().text, 0.4);
+        cr.set_line_width(1.0);
+        cr.rectangle(f64::from(swatch.x) + 0.5, f64::from(swatch.y) + 0.5, f64::from(SIDE) - 1.0, f64::from(SIDE) - 1.0);
+        cr.stroke()?;
+    }
+    Ok(())
 }
 
 /// Draws the magnifier. `source` is the pixel of `frame` under the pointer.
