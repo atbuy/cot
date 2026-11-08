@@ -1,0 +1,15 @@
+[package]
+name = "cot"
+version = "0.1.0"
+edition = "2021"
+description = "Wayland screenshot tool that freezes the screen before you select a region"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+gtk = { package = "gtk4", version = "0.10" }
+gtk4-layer-shell = "0.7"
+png = "0.18"
+
+[profile.release]
+lto = "thin"
+strip = true
