@@ -42,27 +42,49 @@ pub struct Workspace {
     monitors: Vec<Rect>,
     settings_open: bool,
     hover: Option<Hover>,
+    drawn_snap: Option<Rect>,
     tooltip: Option<Button>,
     /// Set by a click, so a button's tooltip stays away until it is re-entered.
     tooltip_dismissed: bool,
 }
 
 impl Workspace {
-    pub fn new(monitors: Vec<Rect>, bounds: Rect, settings: Settings) -> Self {
+    pub fn new(monitors: Vec<Rect>, windows: Vec<Rect>, bounds: Rect, settings: Settings) -> Self {
         Workspace {
-            selector: Selector::new(monitors.clone(), bounds),
+            selector: Selector::new(monitors.clone(), windows, bounds),
             editor: Editor::new(),
             settings,
             monitors,
             settings_open: false,
             hover: None,
+            drawn_snap: None,
             tooltip: None,
             tooltip_dismissed: false,
         }
     }
 
-    pub fn selection(&self) -> Option<Rect> {
+    #[cfg(test)]
+    fn selection(&self) -> Option<Rect> {
         self.selector.selection()
+    }
+
+    /// What to show as selected: the window or monitor a click would take,
+    /// or else the actual selection.
+    pub fn displayed_selection(&self) -> Option<Rect> {
+        self.selector.snap_target().or_else(|| self.selector.selection())
+    }
+
+    fn snap_changed(&mut self) -> bool {
+        let snap = self.selector.snap_target();
+        let changed = snap != self.drawn_snap;
+        self.drawn_snap = snap;
+        changed
+    }
+
+    /// Returns whether anything visible changed.
+    pub fn set_ctrl(&mut self, held: bool) -> bool {
+        self.selector.set_ctrl(held);
+        self.snap_changed()
     }
 
     pub fn editor(&self) -> &Editor {
@@ -150,7 +172,7 @@ impl Workspace {
             self.tooltip = None;
             self.tooltip_dismissed = false;
         }
-        hover_changed || self.selector.is_dragging()
+        self.snap_changed() | hover_changed | self.selector.is_dragging()
     }
 
     fn save(&mut self) -> Outcome {
@@ -275,6 +297,8 @@ mod tests {
     use super::*;
 
     const SELECTION: Rect = Rect { x: 100, y: 200, w: 300, h: 300 };
+    const WINDOW: Rect = Rect { x: 3500, y: 100, w: 800, h: 600 };
+    const HDMI: Rect = Rect { x: 3440, y: 0, w: 1920, h: 1080 };
 
     fn empty(settings: Settings) -> Workspace {
         let monitors = vec![
@@ -282,7 +306,8 @@ mod tests {
             Rect { x: 0, y: 0, w: 3440, h: 1440 },
             Rect { x: 3440, y: 0, w: 1920, h: 1080 },
         ];
-        Workspace::new(monitors, Rect { x: -1440, y: 0, w: 6800, h: 2560 }, settings)
+        let bounds = Rect { x: -1440, y: 0, w: 6800, h: 2560 };
+        Workspace::new(monitors, vec![WINDOW], bounds, settings)
     }
 
     fn drag(ws: &mut Workspace, from: (i32, i32), to: (i32, i32), shift: bool) -> Outcome {
@@ -305,6 +330,61 @@ mod tests {
         let outcome = ws.press();
         ws.release(false);
         outcome
+    }
+
+    fn click_at(ws: &mut Workspace, p: (i32, i32)) -> Outcome {
+        ws.pointer_moved(p);
+        ws.press();
+        ws.release(false)
+    }
+
+    #[test]
+    fn hovering_a_window_shows_it_and_asks_for_a_redraw() {
+        let mut ws = empty(Settings::default());
+        assert!(ws.pointer_moved((4000, 500)));
+        assert_eq!(ws.displayed_selection(), Some(WINDOW));
+        assert_eq!(ws.selection(), None);
+        assert!(ws.toolbar().is_none());
+        assert!(!ws.pointer_moved((4001, 500)));
+    }
+
+    #[test]
+    fn clicking_a_window_opens_the_editor_on_it() {
+        let mut ws = empty(Settings::default());
+        assert_eq!(click_at(&mut ws, (4000, 500)), Outcome::Continue);
+        assert_eq!(ws.selection(), Some(WINDOW));
+        assert!(ws.toolbar().is_some());
+    }
+
+    #[test]
+    fn instant_mode_copies_a_clicked_window() {
+        let mut ws = empty(Settings { after_select: AfterSelect::Instant });
+        assert_eq!(click_at(&mut ws, (4000, 500)), Outcome::Finish(WINDOW));
+    }
+
+    #[test]
+    fn instant_mode_does_nothing_on_empty_desktop() {
+        let mut ws = empty(Settings { after_select: AfterSelect::Instant });
+        assert_eq!(click_at(&mut ws, (3450, 900)), Outcome::Continue);
+        assert_eq!(ws.selection(), None);
+    }
+
+    #[test]
+    fn pressing_ctrl_switches_the_highlight_to_the_monitor() {
+        let mut ws = empty(Settings::default());
+        ws.pointer_moved((4000, 500));
+        assert!(ws.set_ctrl(true));
+        assert_eq!(ws.displayed_selection(), Some(HDMI));
+        assert!(ws.set_ctrl(false));
+        assert_eq!(ws.displayed_selection(), Some(WINDOW));
+    }
+
+    #[test]
+    fn ctrl_click_selects_the_whole_monitor() {
+        let mut ws = empty(Settings::default());
+        ws.set_ctrl(true);
+        click_at(&mut ws, (4000, 500));
+        assert_eq!(ws.selection(), Some(HDMI));
     }
 
     #[test]

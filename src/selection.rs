@@ -22,19 +22,28 @@ enum Mode {
 
 pub struct Selector {
     monitors: Vec<Rect>,
+    /// Topmost first.
+    windows: Vec<Rect>,
     bounds: Rect,
     pointer: Point,
+    ctrl: bool,
     mode: Mode,
 }
 
 impl Selector {
-    pub fn new(monitors: Vec<Rect>, bounds: Rect) -> Self {
+    pub fn new(monitors: Vec<Rect>, windows: Vec<Rect>, bounds: Rect) -> Self {
         Selector {
             monitors,
+            windows,
             bounds,
             pointer: (bounds.x, bounds.y),
+            ctrl: false,
             mode: Mode::Idle,
         }
+    }
+
+    pub fn set_ctrl(&mut self, held: bool) {
+        self.ctrl = held;
     }
 
     pub fn set_pointer(&mut self, p: Point) {
@@ -47,6 +56,34 @@ impl Selector {
 
     fn monitor_under_pointer(&self) -> Option<Rect> {
         self.monitors.iter().copied().find(|m| m.contains(self.pointer))
+    }
+
+    /// The visible part of the topmost window under the pointer.
+    fn window_under_pointer(&self) -> Option<Rect> {
+        let window = self.windows.iter().find(|w| w.contains(self.pointer))?;
+        window.intersect(&self.monitor_under_pointer()?)
+    }
+
+    /// What a click here would select.
+    fn click_target(&self) -> Option<Rect> {
+        if self.ctrl {
+            self.monitor_under_pointer()
+        } else {
+            self.window_under_pointer()
+        }
+    }
+
+    /// What to highlight as about to be selected, before anything is.
+    pub fn snap_target(&self) -> Option<Rect> {
+        match self.mode {
+            Mode::Idle => self.click_target(),
+            Mode::Drawing { previous: None, .. } if self.is_click() => self.click_target(),
+            _ => None,
+        }
+    }
+
+    fn is_click(&self) -> bool {
+        self.selection().is_some_and(|s| s.w < CLICK_SLOP && s.h < CLICK_SLOP)
     }
 
     /// Where a selection edge should go for the current pointer position.
@@ -62,6 +99,7 @@ impl Selector {
         };
         self.mode = match self.mode {
             Mode::Idle => draw(None),
+            Mode::Settled(rect) if self.ctrl => draw(Some(rect)),
             Mode::Settled(rect) => match rect.hit_test(self.pointer, HANDLE_REACH) {
                 Hit::Handle(handle) => Mode::Resizing { start: rect, handle },
                 Hit::Inside => Mode::Moving { start: rect, grab: self.pointer },
@@ -71,18 +109,27 @@ impl Selector {
         };
     }
 
-    /// Ends a drag and leaves the result on screen to be adjusted. A click
-    /// selects the monitor under it, unless a selection already exists: that
-    /// one is kept, so a stray click can't lose it. Returns whether this
+    /// Ends a drag and leaves the result on screen to be adjusted.
+    ///
+    /// A click selects the window under it, or with Ctrl the monitor. Without
+    /// Ctrl an existing selection is kept instead, so a stray click can't lose
+    /// it, and a click on empty desktop selects nothing. Returns whether this
     /// produced a new selection, as opposed to adjusting or keeping one.
     pub fn release(&mut self) -> bool {
         let Some(current) = self.selection() else { return false };
         let (settled, is_new) = match self.mode {
             Mode::Idle | Mode::Settled(_) => return false,
-            Mode::Drawing { previous, .. } if current.w < CLICK_SLOP && current.h < CLICK_SLOP => match previous {
-                Some(rect) => (rect, false),
-                None => (self.monitor_under_pointer().unwrap_or(self.bounds), true),
-            },
+            Mode::Drawing { previous, .. } if self.is_click() => {
+                let target = if self.ctrl || previous.is_none() { self.click_target() } else { None };
+                match (target, previous) {
+                    (Some(target), _) => (target, true),
+                    (None, Some(previous)) => (previous, false),
+                    (None, None) => {
+                        self.mode = Mode::Idle;
+                        return false;
+                    }
+                }
+            }
             Mode::Drawing { .. } => (at_least_one_pixel(current), true),
             _ => (at_least_one_pixel(current), false),
         };
@@ -161,12 +208,16 @@ mod tests {
 
     /// The real layout: rotated, ultrawide, then a smaller landscape monitor.
     fn selector() -> Selector {
+        selector_with(Vec::new())
+    }
+
+    fn selector_with(windows: Vec<Rect>) -> Selector {
         let monitors = vec![
             rect(-1440, 0, 1440, 2560),
             rect(0, 0, 3440, 1440),
             rect(3440, 0, 1920, 1080),
         ];
-        Selector::new(monitors, rect(-1440, 0, 6800, 2560))
+        Selector::new(monitors, windows, rect(-1440, 0, 6800, 2560))
     }
 
     fn drag(s: &mut Selector, from: Point, to: Point) {
@@ -250,15 +301,106 @@ mod tests {
         assert_eq!(s.selection(), Some(rect(1000, 1000, 100, 200)));
     }
 
+    const WINDOW: Rect = Rect { x: 3500, y: 100, w: 800, h: 600 };
+    const FLOATING: Rect = Rect { x: 3600, y: 200, w: 200, h: 200 };
+
     #[test]
-    fn clicking_selects_the_monitor_under_the_pointer() {
-        let mut s = selector();
+    fn hovering_targets_the_window_under_the_pointer() {
+        let mut s = selector_with(vec![WINDOW]);
+        s.set_pointer((4000, 500));
+        assert_eq!(s.snap_target(), Some(WINDOW));
+        assert_eq!(s.selection(), None);
+    }
+
+    #[test]
+    fn clicking_selects_the_window() {
+        let mut s = selector_with(vec![WINDOW]);
+        s.set_pointer((4000, 500));
+        s.press();
+        assert_eq!(s.snap_target(), Some(WINDOW));
+        assert!(s.release());
+        assert_eq!(s.selection(), Some(WINDOW));
+    }
+
+    #[test]
+    fn the_topmost_window_wins() {
+        let mut s = selector_with(vec![FLOATING, WINDOW]);
+        drag(&mut s, (3700, 300), (3700, 300));
+        assert_eq!(s.selection(), Some(FLOATING));
+    }
+
+    #[test]
+    fn a_window_is_cut_to_its_monitor() {
+        let overhanging = rect(5000, 100, 800, 600);
+        let mut s = selector_with(vec![overhanging]);
+        drag(&mut s, (5100, 200), (5100, 200));
+        assert_eq!(s.selection(), Some(rect(5000, 100, 360, 600)));
+    }
+
+    #[test]
+    fn clicking_empty_desktop_selects_nothing() {
+        let mut s = selector_with(vec![WINDOW]);
+        assert!(!{
+            s.set_pointer((3450, 900));
+            s.press();
+            s.release()
+        });
+        assert_eq!(s.selection(), None);
+        assert!(!s.shows_handles());
+    }
+
+    #[test]
+    fn a_drag_over_a_window_still_draws_freely() {
+        let mut s = selector_with(vec![WINDOW]);
+        drag(&mut s, (3600, 200), (3900, 500));
+        assert_eq!(s.selection(), Some(rect(3600, 200, 300, 300)));
+    }
+
+    #[test]
+    fn a_stray_click_on_another_window_keeps_the_selection() {
+        let mut s = selector_with(vec![WINDOW]);
+        drag(&mut s, (100, 200), (400, 500));
         drag(&mut s, (4000, 500), (4000, 500));
+        assert_eq!(s.selection(), Some(rect(100, 200, 300, 300)));
+    }
+
+    #[test]
+    fn nothing_is_targeted_once_something_is_selected() {
+        let mut s = selector_with(vec![WINDOW]);
+        drag(&mut s, (100, 200), (400, 500));
+        s.set_pointer((4000, 500));
+        assert_eq!(s.snap_target(), None);
+    }
+
+    #[test]
+    fn holding_ctrl_targets_the_monitor() {
+        let mut s = selector_with(vec![WINDOW]);
+        s.set_ctrl(true);
+        s.set_pointer((4000, 500));
+        assert_eq!(s.snap_target(), Some(rect(3440, 0, 1920, 1080)));
+    }
+
+    #[test]
+    fn ctrl_click_selects_the_monitor() {
+        let mut s = selector_with(vec![WINDOW]);
+        s.set_ctrl(true);
+        s.set_pointer((4000, 500));
+        s.press();
+        assert!(s.release());
         assert_eq!(s.selection(), Some(rect(3440, 0, 1920, 1080)));
     }
 
     #[test]
-    fn a_stray_click_outside_keeps_the_selection() {
+    fn ctrl_click_replaces_an_existing_selection_even_inside_it() {
+        let mut s = selector_with(vec![WINDOW]);
+        drag(&mut s, (100, 200), (400, 500));
+        s.set_ctrl(true);
+        drag(&mut s, (250, 350), (250, 350));
+        assert_eq!(s.selection(), Some(rect(0, 0, 3440, 1440)));
+    }
+
+    #[test]
+    fn a_stray_click_on_nothing_keeps_the_selection() {
         let mut s = drawn();
         drag(&mut s, (2000, 1000), (2001, 1001));
         assert_eq!(s.selection(), Some(rect(100, 200, 300, 300)));

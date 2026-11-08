@@ -20,6 +20,7 @@ use crate::palette;
 use crate::render::{self, BarState, Capture};
 use crate::settings::Settings;
 use crate::toolbar::Button;
+use crate::windows;
 use crate::workspace::{Action, Key, Outcome, Workspace};
 
 /// Physical keys for shortcuts, so they work on non-Latin layouts too.
@@ -58,7 +59,7 @@ pub struct Session {
 
 impl Session {
     fn selection(&self) -> Option<Rect> {
-        self.workspace.borrow().selection()
+        self.workspace.borrow().displayed_selection()
     }
 
     fn effect_texture(&self, effect: Effect, rect: Rect) -> Option<gdk::Texture> {
@@ -399,7 +400,7 @@ pub fn select_region(frame: Rc<Image>) -> Result<Option<(Capture, Action)>, Stri
         bounds,
         effects: RefCell::default(),
         views: RefCell::default(),
-        workspace: RefCell::new(Workspace::new(rects, bounds, Settings::load())),
+        workspace: RefCell::new(Workspace::new(rects, windows::on_screen(), bounds, Settings::load())),
         cursor: Cell::new("crosshair"),
         tooltip_timer: RefCell::new(None),
         result: Cell::new(None),
@@ -480,10 +481,11 @@ fn build_window(
 fn pointer_controller(monitor: Rect, session: Rc<Session>) -> EventControllerLegacy {
     let controller = EventControllerLegacy::new();
     controller.connect_event(move |_, event| {
-        let mut changed = false;
+        let ctrl = event.modifier_state().contains(gdk::ModifierType::CONTROL_MASK);
+        let mut changed = session.workspace.borrow_mut().set_ctrl(ctrl);
         if let Some((x, y)) = event.position() {
             let global = (monitor.x + x.round() as i32, monitor.y + y.round() as i32);
-            changed = session.workspace.borrow_mut().pointer_moved(global);
+            changed |= session.workspace.borrow_mut().pointer_moved(global);
         }
         let button = event.downcast_ref::<gdk::ButtonEvent>().map(|b| b.button());
         match (event.event_type(), button) {
@@ -515,6 +517,17 @@ fn pointer_controller(monitor: Rect, session: Rc<Session>) -> EventControllerLeg
 
 fn key_controller(session: Rc<Session>) -> EventControllerKey {
     let controller = EventControllerKey::new();
+    {
+        // Ctrl changes the highlight, even if the mouse stays still.
+        let session = session.clone();
+        controller.connect_modifiers(move |_, state| {
+            let ctrl = state.contains(gdk::ModifierType::CONTROL_MASK);
+            if session.workspace.borrow_mut().set_ctrl(ctrl) {
+                session.redraw();
+            }
+            glib::Propagation::Proceed
+        });
+    }
     controller.connect_key_pressed(move |_, key, keycode, state| {
         let ctrl = state.contains(gdk::ModifierType::CONTROL_MASK);
         let shift = state.contains(gdk::ModifierType::SHIFT_MASK);

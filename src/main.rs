@@ -7,6 +7,7 @@ mod render;
 mod selection;
 mod settings;
 mod toolbar;
+mod windows;
 mod workspace;
 
 use std::error::Error;
@@ -26,10 +27,11 @@ use crate::workspace::Action;
 
 /// Freezes the screen, then lets you pick what to keep.
 ///
-/// Drag to select a region, or click to select a whole monitor. Adjust it and
-/// annotate it from the toolbar, then press Enter or Ctrl+C to copy it to the
-/// clipboard, or Ctrl+S to save it to ~/Pictures/Screenshots. With nothing selected, these
-/// take all monitors. Esc or right-click cancels.
+/// Drag to select a region, click a window to select it, or Ctrl+click for a
+/// whole monitor. Adjust and annotate it from the toolbar, then press Enter or
+/// Ctrl+C to copy it to the clipboard, or Ctrl+S to save it to
+/// ~/Pictures/Screenshots. With nothing selected, these take all monitors.
+/// Esc or right-click cancels.
 #[derive(Parser)]
 #[command(version)]
 struct Args {
