@@ -14,6 +14,7 @@ use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 
 use crate::geometry::{to_image_pixels, Rect};
 use crate::image::Image;
+use crate::selection::Selector;
 
 const fn rgb(hex: u32) -> RGBA {
     let [_, r, g, b] = hex.to_be_bytes();
@@ -25,26 +26,22 @@ const ACCENT: RGBA = rgb(0xFF4D6D);
 const SURFACE: RGBA = rgb(0x1C1216);
 const TEXT: RGBA = rgb(0xFFECEF);
 const BORDER: f32 = 2.0;
-/// A press and release closer together than this is a click, not a drag.
-const CLICK_SLOP: i32 = 4;
+const HANDLE: f32 = 10.0;
+const HANDLE_CORE: f32 = 6.0;
 
-/// Selection state shared by the windows of all monitors, in global logical
-/// coordinates so a drag can cross from one monitor to another.
+/// State shared by the windows of all monitors.
 pub struct Session {
     app: gtk::Application,
-    monitors: Vec<Rect>,
     bounds: Rect,
     views: RefCell<Vec<FrozenView>>,
-    anchor: Cell<Option<(i32, i32)>>,
-    pointer: Cell<(i32, i32)>,
+    selector: RefCell<Selector>,
+    cursor: Cell<&'static str>,
     result: Cell<Option<Rect>>,
 }
 
 impl Session {
     fn selection(&self) -> Option<Rect> {
-        self.anchor
-            .get()
-            .map(|anchor| Rect::from_points(anchor, self.pointer.get()))
+        self.selector.borrow().selection()
     }
 
     fn redraw(&self) {
@@ -53,24 +50,23 @@ impl Session {
         }
     }
 
+    fn update_cursor(&self) {
+        let name = self.selector.borrow().cursor();
+        if self.cursor.replace(name) != name {
+            for view in self.views.borrow().iter() {
+                view.set_cursor_from_name(Some(name));
+            }
+        }
+    }
+
+    fn refresh(&self) {
+        self.redraw();
+        self.update_cursor();
+    }
+
     fn finish(&self, result: Option<Rect>) {
         self.result.set(result);
         self.app.quit();
-    }
-
-    /// Ends the drag: a click takes the monitor under it, a drag its rectangle.
-    fn release(&self) {
-        let Some(sel) = self.selection() else { return };
-        if sel.w < CLICK_SLOP && sel.h < CLICK_SLOP {
-            let monitor = self.monitors.iter().find(|m| m.contains(self.pointer.get()));
-            self.finish(monitor.copied().or(Some(self.bounds)));
-        } else {
-            self.finish(Some(Rect {
-                w: sel.w.max(1),
-                h: sel.h.max(1),
-                ..sel
-            }));
-        }
     }
 }
 
@@ -126,18 +122,28 @@ mod imp {
             }
 
             // Unclipped, so no edge is drawn where a selection continues on
-            // the next monitor.
+            // the next monitor. An edge flush with the screen is drawn inside,
+            // as there is nowhere outside it to draw.
             let Some(sel) = selection else { return };
             let x = (sel.x - monitor.x) as f32;
             let y = (sel.y - monitor.y) as f32;
             let (w, h) = (sel.w as f32, sel.h as f32);
+            let outer_left = if sel.x == monitor.x { x } else { x - BORDER };
+            let outer_right = if sel.right() == monitor.right() { x + w } else { x + w + BORDER };
+            let outer_top = if sel.y == monitor.y { y } else { y - BORDER };
+            let outer_bottom = if sel.bottom() == monitor.bottom() { y + h } else { y + h + BORDER };
+            let (outer_w, outer_h) = (outer_right - outer_left, outer_bottom - outer_top);
             for (bx, by, bw, bh) in [
-                (x - BORDER, y - BORDER, w + 2.0 * BORDER, BORDER),
-                (x - BORDER, y + h, w + 2.0 * BORDER, BORDER),
-                (x - BORDER, y, BORDER, h),
-                (x + w, y, BORDER, h),
+                (outer_left, outer_top, outer_w, BORDER),
+                (outer_left, outer_bottom - BORDER, outer_w, BORDER),
+                (outer_left, outer_top, BORDER, outer_h),
+                (outer_right - BORDER, outer_top, BORDER, outer_h),
             ] {
                 snapshot.append_color(&ACCENT, &graphene::Rect::new(bx, by, bw, bh));
+            }
+
+            if session.selector.borrow().shows_handles() {
+                draw_handles(snapshot, (x, y, w, h), (width, height));
             }
 
             if monitor.contains((sel.x, sel.y)) {
@@ -172,6 +178,32 @@ mod imp {
                 (Some(texture), Some(monitor)) => texture.width() as f64 / monitor.w as f64,
                 _ => 1.0,
             }
+        }
+    }
+}
+
+/// Draws the eight handles, keeping those on a screen edge fully visible.
+fn draw_handles(snapshot: &gtk::Snapshot, (x, y, w, h): (f32, f32, f32, f32), (max_x, max_y): (f32, f32)) {
+    let inset = |c: f32, max: f32| {
+        if c == 0.0 {
+            HANDLE / 2.0
+        } else if c == max {
+            max - HANDLE / 2.0
+        } else {
+            c
+        }
+    };
+    let square = |cx: f32, cy: f32, size: f32| {
+        graphene::Rect::new(cx - size / 2.0, cy - size / 2.0, size, size)
+    };
+    for hx in [x, x + w / 2.0, x + w] {
+        for hy in [y, y + h / 2.0, y + h] {
+            if hx == x + w / 2.0 && hy == y + h / 2.0 {
+                continue;
+            }
+            let (cx, cy) = (inset(hx, max_x), inset(hy, max_y));
+            snapshot.append_color(&ACCENT, &square(cx, cy, HANDLE));
+            snapshot.append_color(&TEXT, &square(cx, cy, HANDLE_CORE));
         }
     }
 }
@@ -211,11 +243,10 @@ pub fn select_region(frame: Rc<Image>) -> Result<Option<Rect>, String> {
     let app = gtk::Application::new(Some("dev.atbuy.cot"), gio::ApplicationFlags::NON_UNIQUE);
     let session = Rc::new(Session {
         app: app.clone(),
-        monitors: rects,
         bounds,
         views: RefCell::default(),
-        anchor: Cell::new(None),
-        pointer: Cell::new((0, 0)),
+        selector: RefCell::new(Selector::new(rects, bounds)),
+        cursor: Cell::new("crosshair"),
         result: Cell::new(None),
     });
 
@@ -288,17 +319,25 @@ fn pointer_controller(monitor: Rect, session: Rc<Session>) -> EventControllerLeg
     controller.connect_event(move |_, event| {
         if let Some((x, y)) = event.position() {
             let global = (monitor.x + x.round() as i32, monitor.y + y.round() as i32);
-            session.pointer.set(session.bounds.clamp_point(global));
+            session.selector.borrow_mut().set_pointer(global);
         }
         let button = event.downcast_ref::<gdk::ButtonEvent>().map(|b| b.button());
         match (event.event_type(), button) {
             (gdk::EventType::ButtonPress, Some(gdk::BUTTON_PRIMARY)) => {
-                session.anchor.set(Some(session.pointer.get()));
-                session.redraw();
+                session.selector.borrow_mut().press();
+                session.refresh();
             }
             (gdk::EventType::ButtonPress, Some(gdk::BUTTON_SECONDARY)) => session.finish(None),
-            (gdk::EventType::ButtonRelease, Some(gdk::BUTTON_PRIMARY)) => session.release(),
-            (gdk::EventType::MotionNotify, _) if session.anchor.get().is_some() => session.redraw(),
+            (gdk::EventType::ButtonRelease, Some(gdk::BUTTON_PRIMARY)) => {
+                session.selector.borrow_mut().release();
+                session.refresh();
+            }
+            (gdk::EventType::MotionNotify, _) => {
+                if session.selector.borrow().is_dragging() {
+                    session.redraw();
+                }
+                session.update_cursor();
+            }
             _ => {}
         }
         glib::Propagation::Stop
@@ -314,7 +353,7 @@ fn key_controller(session: Rc<Session>) -> EventControllerKey {
             glib::Propagation::Stop
         }
         gdk::Key::Return | gdk::Key::KP_Enter => {
-            session.finish(Some(session.bounds));
+            session.finish(Some(session.selector.borrow().confirmed()));
             glib::Propagation::Stop
         }
         _ => glib::Propagation::Proceed,
