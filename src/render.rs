@@ -10,7 +10,7 @@ use crate::editor::{Shape, Tool};
 use crate::geometry::{to_image_pixels, Rect};
 use crate::image::Image;
 use crate::magnifier::{self, Magnifier};
-use crate::palette::{ACCENT, ANNOTATION, SURFACE, TEXT};
+use crate::palette;
 use crate::settings::AfterSelect;
 use crate::toolbar::{Button, Hover, SettingsPanel, Toolbar, TOOLTIP_PAD_X};
 
@@ -83,11 +83,11 @@ fn draw_text(cr: &cairo::Context, at: (i32, i32), text: &str, caret: bool) -> Dr
     // A dark halo keeps the text readable on light backgrounds.
     cr.move_to(x, y);
     pangocairo::functions::layout_path(cr, &layout);
-    set_color(cr, SURFACE, 1.0);
+    set_color(cr, palette::active().surface, 1.0);
     cr.set_line_width(TEXT_HALO);
     cr.stroke()?;
 
-    set_color(cr, ANNOTATION, 1.0);
+    set_color(cr, palette::active().annotation, 1.0);
     cr.move_to(x, y);
     pangocairo::functions::show_layout(cr, &layout);
     if caret {
@@ -106,7 +106,7 @@ pub fn draw_shape(cr: &cairo::Context, shape: &Shape, in_progress: bool) -> Draw
     cr.set_line_cap(cairo::LineCap::Round);
     cr.set_line_join(cairo::LineJoin::Round);
     cr.set_line_width(STROKE);
-    set_color(cr, ANNOTATION, 1.0);
+    set_color(cr, palette::active().annotation, 1.0);
     match shape {
         Shape::Arrow { from, to } => draw_arrow(cr, *from, *to),
         Shape::Rectangle { a, b } => {
@@ -119,7 +119,7 @@ pub fn draw_shape(cr: &cairo::Context, shape: &Shape, in_progress: bool) -> Draw
             cr.stroke()
         }
         Shape::Highlighter(points) => {
-            set_color(cr, ANNOTATION, HIGHLIGHT_ALPHA);
+            set_color(cr, palette::active().annotation, HIGHLIGHT_ALPHA);
             cr.set_line_width(HIGHLIGHT_STROKE);
             trace_points(cr, points);
             cr.stroke()
@@ -223,8 +223,8 @@ fn fill_rect(cr: &cairo::Context, r: &Rect, hex: u32, alpha: f64) -> Drawn {
 
 /// A panel with a one-pixel accent line just inside its edge.
 fn draw_chrome(cr: &cairo::Context, r: &Rect) -> Drawn {
-    fill_rect(cr, r, SURFACE, 1.0)?;
-    set_color(cr, ACCENT, 1.0);
+    fill_rect(cr, r, palette::active().surface, 1.0)?;
+    set_color(cr, palette::active().selection, 1.0);
     cr.set_line_width(1.0);
     cr.rectangle(
         f64::from(r.x) + 0.5,
@@ -365,16 +365,16 @@ pub fn draw_toolbar(cr: &cairo::Context, bar: &Toolbar, state: &BarState) -> Dra
             _ => true,
         };
         if active {
-            fill_rect(cr, r, ACCENT, 1.0)?;
+            fill_rect(cr, r, palette::active().selection, 1.0)?;
         } else if enabled && state.hover == Some(Hover::Button(*button)) {
-            fill_rect(cr, r, TEXT, HOVER_ALPHA)?;
+            fill_rect(cr, r, palette::active().text, HOVER_ALPHA)?;
         }
         cr.save()?;
         cr.translate(f64::from(r.x) + f64::from(r.w) / 2.0, f64::from(r.y) + f64::from(r.h) / 2.0);
         cr.set_line_width(ICON_STROKE);
         cr.set_line_cap(cairo::LineCap::Round);
         cr.set_line_join(cairo::LineJoin::Round);
-        set_color(cr, if active { SURFACE } else { TEXT }, if enabled { 1.0 } else { DISABLED_ALPHA });
+        set_color(cr, if active { palette::active().surface } else { palette::active().text }, if enabled { 1.0 } else { DISABLED_ALPHA });
         trace_icon(cr, *button)?;
         cr.restore()?;
     }
@@ -386,7 +386,7 @@ pub fn draw_tooltip(cr: &cairo::Context, rect: &Rect, text: &str) -> Drawn {
     draw_chrome(cr, rect)?;
     let x = f64::from(rect.x + TOOLTIP_PAD_X);
     let center_y = f64::from(rect.y) + f64::from(rect.h) / 2.0;
-    draw_label(cr, text, x, center_y, TEXT, 1.0)
+    draw_label(cr, text, x, center_y, palette::active().text, 1.0)
 }
 
 /// Draws the settings panel in global logical coordinates.
@@ -400,16 +400,16 @@ pub fn draw_settings(cr: &cairo::Context, panel: &SettingsPanel, state: &BarStat
         SettingsPanel::TITLE,
         f64::from(first_row.x) + INDENT,
         f64::from(first_row.y) - 14.0,
-        TEXT,
+        palette::active().text,
         0.65,
     )?;
     for (option, label, r) in &panel.options {
         if state.hover == Some(Hover::Option(*option)) {
-            fill_rect(cr, r, TEXT, HOVER_ALPHA)?;
+            fill_rect(cr, r, palette::active().text, HOVER_ALPHA)?;
         }
         let center_y = f64::from(r.y) + f64::from(r.h) / 2.0;
         let radio_x = f64::from(r.x) + INDENT + RADIO;
-        set_color(cr, ACCENT, 1.0);
+        set_color(cr, palette::active().selection, 1.0);
         cr.set_line_width(1.8);
         // Drawing the previous label left a current point the arc would join.
         cr.new_path();
@@ -419,18 +419,18 @@ pub fn draw_settings(cr: &cairo::Context, panel: &SettingsPanel, state: &BarStat
             cr.arc(radio_x, center_y, RADIO - 3.5, 0.0, TAU);
             cr.fill()?;
         }
-        draw_label(cr, label, radio_x + RADIO + INDENT, center_y, TEXT, 1.0)?;
+        draw_label(cr, label, radio_x + RADIO + INDENT, center_y, palette::active().text, 1.0)?;
     }
 
     let r = &panel.magnifier_toggle;
     if state.hover == Some(Hover::MagnifierToggle) {
-        fill_rect(cr, r, TEXT, HOVER_ALPHA)?;
+        fill_rect(cr, r, palette::active().text, HOVER_ALPHA)?;
     }
     let center_y = f64::from(r.y) + f64::from(r.h) / 2.0;
     let box_x = f64::from(r.x) + INDENT;
     let side = 2.0 * RADIO;
     cr.new_path();
-    set_color(cr, ACCENT, 1.0);
+    set_color(cr, palette::active().selection, 1.0);
     cr.set_line_width(1.8);
     cr.rectangle(box_x, center_y - RADIO, side, side);
     cr.stroke()?;
@@ -438,7 +438,7 @@ pub fn draw_settings(cr: &cairo::Context, panel: &SettingsPanel, state: &BarStat
         cr.rectangle(box_x + 3.5, center_y - RADIO + 3.5, side - 7.0, side - 7.0);
         cr.fill()?;
     }
-    draw_label(cr, SettingsPanel::MAGNIFIER_LABEL, box_x + side + INDENT, center_y, TEXT, 1.0)
+    draw_label(cr, SettingsPanel::MAGNIFIER_LABEL, box_x + side + INDENT, center_y, palette::active().text, 1.0)
 }
 
 /// Draws the magnifier. `source` is the pixel of `frame` under the pointer.
@@ -460,18 +460,18 @@ pub fn draw_magnifier(cr: &cairo::Context, m: &Magnifier, frame: &Image, source:
 
     // Tint the row and column through the target, then outline the pixel.
     let grid = f64::from((2 * RADIUS + 1) * ZOOM);
-    set_color(cr, ACCENT, 0.3);
+    set_color(cr, palette::active().selection, 0.3);
     cr.rectangle(cell(0, grid_x), f64::from(grid_y), size, grid);
     cr.rectangle(f64::from(grid_x), cell(0, grid_y), grid, size);
     cr.fill()?;
-    set_color(cr, ACCENT, 1.0);
+    set_color(cr, palette::active().selection, 1.0);
     cr.set_line_width(1.0);
     cr.rectangle(cell(0, grid_x) + 0.5, cell(0, grid_y) + 0.5, size - 1.0, size - 1.0);
     cr.stroke()?;
 
     let label = format!("{}, {}", m.center.0, m.center.1);
     let center_y = f64::from(m.rect.bottom() - PAD - LABEL_HEIGHT / 2);
-    draw_label(cr, &label, f64::from(grid_x), center_y, TEXT, 1.0)
+    draw_label(cr, &label, f64::from(grid_x), center_y, palette::active().text, 1.0)
 }
 
 #[cfg(test)]

@@ -30,15 +30,12 @@ const KEYCODE_S: u32 = 39;
 const KEYCODE_C: u32 = 54;
 const TOOLTIP_DELAY: Duration = Duration::from_millis(500);
 
-const fn rgb(hex: u32) -> RGBA {
+fn rgb(hex: u32) -> RGBA {
     let [_, r, g, b] = hex.to_be_bytes();
     RGBA::new(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0)
 }
 
 const DIM: RGBA = RGBA::new(0.0, 0.0, 0.0, 0.4);
-const ACCENT: RGBA = rgb(palette::ACCENT);
-const SURFACE: RGBA = rgb(palette::SURFACE);
-const TEXT: RGBA = rgb(palette::TEXT);
 const BORDER: f32 = 2.0;
 const HANDLE: f32 = 10.0;
 const HANDLE_CORE: f32 = 6.0;
@@ -209,7 +206,7 @@ mod imp {
                 (outer_left, outer_top, BORDER, outer_h),
                 (outer_right - BORDER, outer_top, BORDER, outer_h),
             ] {
-                snapshot.append_color(&ACCENT, &graphene::Rect::new(bx, by, bw, bh));
+                snapshot.append_color(&rgb(palette::active().selection), &graphene::Rect::new(bx, by, bw, bh));
             }
 
             if session.workspace.borrow().shows_handles() {
@@ -336,10 +333,10 @@ mod imp {
             let box_y = if above >= 0.0 { above } else { y + 4.0 };
             let box_x = x.max(4.0);
 
-            snapshot.append_color(&SURFACE, &graphene::Rect::new(box_x, box_y, box_w, box_h));
+            snapshot.append_color(&rgb(palette::active().surface), &graphene::Rect::new(box_x, box_y, box_w, box_h));
             snapshot.save();
             snapshot.translate(&graphene::Point::new(box_x + PAD, box_y + PAD / 2.0));
-            snapshot.append_layout(&layout, &TEXT);
+            snapshot.append_layout(&layout, &rgb(palette::active().text));
             snapshot.restore();
         }
 
@@ -372,8 +369,8 @@ fn draw_handles(snapshot: &gtk::Snapshot, (x, y, w, h): (f32, f32, f32, f32), (m
                 continue;
             }
             let (cx, cy) = (inset(hx, max_x), inset(hy, max_y));
-            snapshot.append_color(&ACCENT, &square(cx, cy, HANDLE));
-            snapshot.append_color(&TEXT, &square(cx, cy, HANDLE_CORE));
+            snapshot.append_color(&rgb(palette::active().selection), &square(cx, cy, HANDLE));
+            snapshot.append_color(&rgb(palette::active().text), &square(cx, cy, HANDLE_CORE));
         }
     }
 }
@@ -386,7 +383,7 @@ glib::wrapper! {
 
 /// Shows the frozen frame and blocks until the user has chosen. Returns the
 /// region in image pixels, or `None` if they cancelled.
-pub fn select_region(frame: Rc<Image>) -> Result<Option<(Capture, Action)>, String> {
+pub fn select_region(frame: Rc<Image>, settings: Settings) -> Result<Option<(Capture, Action)>, String> {
     gtk::init().map_err(|e| format!("could not initialize GTK: {e}"))?;
     let display = gdk::Display::default().ok_or("no display")?;
     let monitors: Vec<gdk::Monitor> = display
@@ -417,7 +414,7 @@ pub fn select_region(frame: Rc<Image>) -> Result<Option<(Capture, Action)>, Stri
         bounds,
         effects: RefCell::default(),
         views: RefCell::default(),
-        workspace: RefCell::new(Workspace::new(rects, windows::on_screen(), bounds, Settings::load())),
+        workspace: RefCell::new(Workspace::new(rects, windows::on_screen(), bounds, settings)),
         cursor: Cell::new("crosshair"),
         tooltip_timer: RefCell::new(None),
         result: Cell::new(None),

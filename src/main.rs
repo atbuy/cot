@@ -24,6 +24,7 @@ use clap::Parser;
 use gtk::glib;
 
 use crate::image::Image;
+use crate::settings::Config;
 use crate::workspace::Action;
 
 /// Freezes the screen, then lets you pick what to keep.
@@ -32,7 +33,8 @@ use crate::workspace::Action;
 /// whole monitor. Adjust and annotate it from the toolbar, then press Enter or
 /// Ctrl+C to copy it to the clipboard, or Ctrl+S to save it to
 /// ~/Pictures/Screenshots. With nothing selected, these take all monitors.
-/// Esc or right-click cancels.
+/// Esc or right-click cancels. Colors and the save folder can be set in
+/// ~/.config/cot/config.toml.
 #[derive(Parser)]
 #[command(version)]
 struct Args {
@@ -100,12 +102,11 @@ fn write_new_file(dir: &Path, stem: &str, bytes: &[u8]) -> io::Result<PathBuf> {
     }
 }
 
-fn save_screenshot(png: &[u8]) -> Result<(), Box<dyn Error>> {
-    let home = std::env::var_os("HOME").ok_or("HOME is not set")?;
-    let dir = PathBuf::from(home).join("Pictures").join("Screenshots");
+fn save_screenshot(png: &[u8], folder: Option<&Path>) -> Result<(), Box<dyn Error>> {
+    let folder = folder.ok_or("HOME is not set, so set save_folder in the config file")?;
     let stamp = glib::DateTime::now_local()?.format("%Y-%m-%d_%H-%M-%S")?;
-    write_new_file(&dir, &format!("cot-{stamp}"), png)
-        .map_err(|e| format!("could not save to {}: {e}", dir.display()))?;
+    write_new_file(folder, &format!("cot-{stamp}"), png)
+        .map_err(|e| format!("could not save to {}: {e}", folder.display()))?;
     Ok(())
 }
 
@@ -115,11 +116,13 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     };
 
     let frame = Rc::new(Image::capture(args.cursor)?);
+    let config = Config::load();
+    palette::set(config.palette);
     let mut action = Action::Copy;
     let result = if args.full {
         frame
     } else {
-        let Some((capture, chosen)) = overlay::select_region(frame.clone())? else {
+        let Some((capture, chosen)) = overlay::select_region(frame.clone(), config.settings)? else {
             return Ok(());
         };
         action = chosen;
@@ -134,7 +137,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
             fs::write(&path, png).map_err(|e| format!("could not write {}: {e}", path.display()))?
         }
         (None, Action::Copy) => copy_to_clipboard(&png)?,
-        (None, Action::Save) => save_screenshot(&png)?,
+        (None, Action::Save) => save_screenshot(&png, config.save_folder.as_deref())?,
     }
     Ok(())
 }
