@@ -91,6 +91,14 @@ impl Config {
             }
         };
 
+        // Read first, so [colors] overrides it wherever each appears in the file.
+        if let Some(item) = doc.get("theme") {
+            match item.as_str().and_then(palette::theme) {
+                Some(theme) => config.palette = theme,
+                None => warnings.push(format!("theme must be one of: {}", palette::theme_names())),
+            }
+        }
+
         for (key, item) in doc.iter() {
             let mut invalid = |expected: &str| warnings.push(format!("{key} must be {expected}"));
             match key {
@@ -107,6 +115,7 @@ impl Config {
                     Some(folder) => config.save_folder = Some(folder),
                     None => invalid("an absolute path or one starting with ~/"),
                 },
+                "theme" => {}
                 "colors" => read_colors(item, &mut config.palette, &mut warnings),
                 _ => warnings.push(format!("unknown setting {key}")),
             }
@@ -242,6 +251,41 @@ mod tests {
     }
 
     #[test]
+    fn a_theme_sets_every_color() {
+        let (config, warnings) = parse("theme = \"ultraviolet\"\n");
+        assert!(warnings.is_empty());
+        assert_eq!(config.palette, palette::theme("ultraviolet").unwrap());
+    }
+
+    #[test]
+    fn colors_override_only_their_part_of_the_theme() {
+        let (config, warnings) = parse("theme = \"graphite-mono\"\n[colors]\nselection = \"#112233\"\n");
+        assert!(warnings.is_empty());
+        let theme = palette::theme("graphite-mono").unwrap();
+        assert_eq!(config.palette, Palette { selection: 0x112233, ..theme });
+    }
+
+    #[test]
+    fn colors_override_the_theme_even_when_written_first() {
+        let (config, _) = parse("colors = { text = \"#112233\" }\ntheme = \"ultraviolet\"\n");
+        let theme = palette::theme("ultraviolet").unwrap();
+        assert_eq!(config.palette, Palette { text: 0x112233, ..theme });
+    }
+
+    #[test]
+    fn a_bad_color_falls_back_to_the_theme_not_hot_coral() {
+        let (config, warnings) = parse("theme = \"ultraviolet\"\n[colors]\nselection = \"red\"\n");
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(config.palette, palette::theme("ultraviolet").unwrap());
+    }
+
+    #[test]
+    fn saving_keeps_the_theme() {
+        let merged = Settings::default().merged_into("theme = \"ultraviolet\"\n").unwrap();
+        assert!(merged.contains("theme = \"ultraviolet\""));
+    }
+
+    #[test]
     fn a_bad_value_warns_and_keeps_the_default() {
         for text in [
             "after_select = \"sometimes\"",
@@ -250,6 +294,8 @@ mod tests {
             "save_folder = \"relative/path\"",
             "save_folder = \"~other/shots\"",
             "save_folder = 5",
+            "theme = \"sparkle\"",
+            "theme = 3",
             "colors = \"red\"",
             "[colors]\nselection = \"red\"",
             "[colors]\nsparkle = \"#112233\"",

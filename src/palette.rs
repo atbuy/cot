@@ -1,5 +1,5 @@
-//! The colors in use, as 0xRRGGBB. Hot Coral unless the config file says
-//! otherwise, and fixed once the program has read it.
+//! The built-in themes and the colors in use, as 0xRRGGBB. The colors are
+//! Hot Coral unless the config file says otherwise, and fixed once it is read.
 
 use std::sync::OnceLock;
 
@@ -11,15 +11,32 @@ pub struct Palette {
     pub annotation: u32,
 }
 
+const fn palette(selection: u32, surface: u32, text: u32, annotation: u32) -> Palette {
+    Palette { selection, surface, text, annotation }
+}
+
+const HOT_CORAL: Palette = palette(0xFF4D6D, 0x1C1216, 0xFFECEF, 0x4DD8FF);
+
+const THEMES: [(&str, Palette); 5] = [
+    ("hot-coral", HOT_CORAL),
+    ("signal-amber", palette(0xFFB000, 0x17140F, 0xF5EDE0, 0xFF5C39)),
+    ("electric-mint", palette(0x2EF2B3, 0x0E1A1A, 0xE6FFF7, 0xFF4F8B)),
+    ("ultraviolet", palette(0xB388FF, 0x17122B, 0xF0EBFF, 0xFFD166)),
+    ("graphite-mono", palette(0xFFFFFF, 0x1A1A1A, 0xF2F2F2, 0xFF3B30)),
+];
+
 impl Default for Palette {
     fn default() -> Self {
-        Palette {
-            selection: 0xFF4D6D,
-            surface: 0x1C1216,
-            text: 0xFFECEF,
-            annotation: 0x4DD8FF,
-        }
+        HOT_CORAL
     }
+}
+
+pub fn theme(name: &str) -> Option<Palette> {
+    THEMES.iter().find(|(theme, _)| *theme == name).map(|(_, palette)| *palette)
+}
+
+pub fn theme_names() -> String {
+    THEMES.map(|(name, _)| name).join(", ")
 }
 
 static ACTIVE: OnceLock<Palette> = OnceLock::new();
@@ -44,6 +61,21 @@ pub fn parse_hex(text: &str) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_theme_is_found_by_name_and_distinct() {
+        for (name, palette) in THEMES {
+            assert_eq!(theme(name), Some(palette));
+            assert!(theme_names().contains(name));
+            assert_eq!(THEMES.iter().filter(|(_, other)| *other == palette).count(), 1);
+        }
+        assert_eq!(theme("sparkle"), None);
+    }
+
+    #[test]
+    fn the_default_is_hot_coral() {
+        assert_eq!(theme("hot-coral"), Some(Palette::default()));
+    }
 
     #[test]
     fn reads_hex_colors_in_either_case() {
