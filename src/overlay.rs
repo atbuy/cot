@@ -3,6 +3,7 @@
 
 use std::cell::{Cell, OnceCell, RefCell};
 use std::rc::Rc;
+use std::time::Duration;
 
 use gtk::gdk::{self, RGBA};
 use gtk::gio::{self, prelude::*};
@@ -17,11 +18,13 @@ use crate::image::Image;
 use crate::palette;
 use crate::render::{self, BarState, Capture};
 use crate::settings::Settings;
+use crate::toolbar::Button;
 use crate::workspace::{Key, Outcome, Workspace};
 
 /// Physical keys for undo and redo, so they work on non-Latin layouts too.
 const KEYCODE_Z: u32 = 52;
 const KEYCODE_Y: u32 = 29;
+const TOOLTIP_DELAY: Duration = Duration::from_millis(500);
 
 const fn rgb(hex: u32) -> RGBA {
     let [_, r, g, b] = hex.to_be_bytes();
@@ -43,6 +46,7 @@ pub struct Session {
     views: RefCell<Vec<FrozenView>>,
     workspace: RefCell<Workspace>,
     cursor: Cell<&'static str>,
+    tooltip_timer: RefCell<Option<(Button, glib::SourceId)>>,
     result: Cell<Option<Rect>>,
 }
 
@@ -66,9 +70,32 @@ impl Session {
         }
     }
 
-    fn refresh(&self) {
+    /// Keeps the delay timer running for the button being waited on, if any.
+    fn sync_tooltip_timer(self: &Rc<Self>) {
+        let pending = self.workspace.borrow().pending_tooltip();
+        let mut timer = self.tooltip_timer.borrow_mut();
+        if timer.as_ref().map(|(button, _)| *button) == pending {
+            return;
+        }
+        if let Some((_, source)) = timer.take() {
+            source.remove();
+        }
+        if let Some(button) = pending {
+            let session = self.clone();
+            let source = glib::timeout_add_local_once(TOOLTIP_DELAY, move || {
+                // A timer that has fired must not be removed, only forgotten.
+                session.tooltip_timer.borrow_mut().take();
+                session.workspace.borrow_mut().show_tooltip(button);
+                session.redraw();
+            });
+            *timer = Some((button, source));
+        }
+    }
+
+    fn refresh(self: &Rc<Self>) {
         self.redraw();
         self.update_cursor();
+        self.sync_tooltip_timer();
     }
 
     fn apply(&self, outcome: Outcome) {
@@ -232,6 +259,17 @@ mod imp {
                     eprintln!("cot: could not draw settings: {e}");
                 }
             }
+            if let Some(button) = workspace.tooltip() {
+                let layout = self.obj().create_pango_layout(Some(button.label()));
+                layout.set_font_description(Some(&render::label_font()));
+                let Some(rect) = bar.tooltip_rect(button, layout.pixel_size(), workspace.settings_open()) else {
+                    return;
+                };
+                let cr = global_cairo(snapshot, &rect, monitor);
+                if let Err(e) = render::draw_tooltip(&cr, &rect, button.label()) {
+                    eprintln!("cot: could not draw tooltip: {e}");
+                }
+            }
         }
 
         /// Shows the size in output pixels, so it matches the saved image.
@@ -328,6 +366,7 @@ pub fn select_region(frame: Rc<Image>) -> Result<Option<Capture>, String> {
         views: RefCell::default(),
         workspace: RefCell::new(Workspace::new(rects, bounds, Settings::load())),
         cursor: Cell::new("crosshair"),
+        tooltip_timer: RefCell::new(None),
         result: Cell::new(None),
     });
 
@@ -423,6 +462,7 @@ fn pointer_controller(monitor: Rect, session: Rc<Session>) -> EventControllerLeg
                     session.redraw();
                 }
                 session.update_cursor();
+                session.sync_tooltip_timer();
             }
             _ => {}
         }

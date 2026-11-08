@@ -32,6 +32,9 @@ pub struct Workspace {
     monitors: Vec<Rect>,
     settings_open: bool,
     hover: Option<Hover>,
+    tooltip: Option<Button>,
+    /// Set by a click, so a button's tooltip stays away until it is re-entered.
+    tooltip_dismissed: bool,
 }
 
 impl Workspace {
@@ -43,6 +46,8 @@ impl Workspace {
             monitors,
             settings_open: false,
             hover: None,
+            tooltip: None,
+            tooltip_dismissed: false,
         }
     }
 
@@ -66,6 +71,29 @@ impl Workspace {
         self.hover
     }
 
+    pub fn tooltip(&self) -> Option<Button> {
+        self.tooltip
+    }
+
+    /// The button whose tooltip should appear once the hover delay has passed.
+    pub fn pending_tooltip(&self) -> Option<Button> {
+        match self.hover {
+            Some(Hover::Button(button)) if !self.tooltip_dismissed && self.tooltip != Some(button) => Some(button),
+            _ => None,
+        }
+    }
+
+    /// Shows the tooltip, if the pointer is still waiting on that button.
+    pub fn show_tooltip(&mut self, button: Button) {
+        if self.pending_tooltip() == Some(button) {
+            self.tooltip = Some(button);
+        }
+    }
+
+    fn is_dragging(&self) -> bool {
+        self.selector.is_dragging() || self.editor.is_drawing()
+    }
+
     pub fn shows_handles(&self) -> bool {
         self.selector.shows_handles() && self.editor.tool() == Tool::Select
     }
@@ -78,6 +106,9 @@ impl Workspace {
     }
 
     fn hover_at(&self, p: (i32, i32)) -> Option<Hover> {
+        if self.is_dragging() {
+            return None;
+        }
         let bar = self.toolbar()?;
         if self.settings_open {
             if let Some(option) = bar.panel().option_at(p) {
@@ -88,8 +119,10 @@ impl Workspace {
     }
 
     fn over_chrome(&self, p: (i32, i32)) -> bool {
-        self.toolbar()
-            .is_some_and(|bar| bar.rect.contains(p) || (self.settings_open && bar.panel().rect.contains(p)))
+        !self.is_dragging()
+            && self
+                .toolbar()
+                .is_some_and(|bar| bar.rect.contains(p) || (self.settings_open && bar.panel().rect.contains(p)))
     }
 
     /// Returns whether anything visible changed.
@@ -103,6 +136,10 @@ impl Workspace {
         let hover = self.hover_at(pointer);
         let hover_changed = hover != self.hover;
         self.hover = hover;
+        if hover_changed {
+            self.tooltip = None;
+            self.tooltip_dismissed = false;
+        }
         hover_changed || self.selector.is_dragging()
     }
 
@@ -116,6 +153,8 @@ impl Workspace {
     }
 
     pub fn press(&mut self) -> Outcome {
+        self.tooltip = None;
+        self.tooltip_dismissed = true;
         let p = self.selector.pointer();
         if let Some(bar) = self.toolbar() {
             if self.settings_open {
@@ -362,6 +401,66 @@ mod tests {
         let mut ws = selected();
         ws.key(Key::Char('x'));
         assert!(ws.finished_shapes().is_empty());
+    }
+
+    fn hover_button(ws: &mut Workspace, button: Button) {
+        let bar = ws.toolbar().unwrap();
+        let (_, r) = *bar.buttons.iter().find(|(b, _)| *b == button).unwrap();
+        ws.pointer_moved((r.x + 2, r.y + 2));
+    }
+
+    #[test]
+    fn hovering_waits_for_the_delay_before_showing_a_tooltip() {
+        let mut ws = selected();
+        hover_button(&mut ws, Button::Undo);
+        assert_eq!(ws.pending_tooltip(), Some(Button::Undo));
+        assert_eq!(ws.tooltip(), None);
+        ws.show_tooltip(Button::Undo);
+        assert_eq!(ws.tooltip(), Some(Button::Undo));
+        assert_eq!(ws.pending_tooltip(), None);
+    }
+
+    #[test]
+    fn leaving_hides_the_tooltip() {
+        let mut ws = selected();
+        hover_button(&mut ws, Button::Undo);
+        ws.show_tooltip(Button::Undo);
+        ws.pointer_moved((2000, 1000));
+        assert_eq!(ws.tooltip(), None);
+        assert_eq!(ws.pending_tooltip(), None);
+    }
+
+    #[test]
+    fn a_late_timer_for_another_button_shows_nothing() {
+        let mut ws = selected();
+        hover_button(&mut ws, Button::Undo);
+        hover_button(&mut ws, Button::Redo);
+        ws.show_tooltip(Button::Undo);
+        assert_eq!(ws.tooltip(), None);
+        assert_eq!(ws.pending_tooltip(), Some(Button::Redo));
+    }
+
+    #[test]
+    fn clicking_dismisses_the_tooltip_until_the_button_is_reentered() {
+        let mut ws = selected();
+        click_button(&mut ws, Button::Settings);
+        assert_eq!(ws.tooltip(), None);
+        assert_eq!(ws.pending_tooltip(), None);
+        ws.pointer_moved((2000, 1000));
+        hover_button(&mut ws, Button::Settings);
+        assert_eq!(ws.pending_tooltip(), Some(Button::Settings));
+    }
+
+    #[test]
+    fn dragging_over_the_toolbar_does_not_hover_it() {
+        let mut ws = selected();
+        let bar = ws.toolbar().unwrap();
+        let (_, r) = bar.buttons[1];
+        ws.pointer_moved((250, 350));
+        ws.press();
+        ws.pointer_moved((r.x + 2, r.y + 2));
+        assert_eq!(ws.hover(), None);
+        assert_eq!(ws.pending_tooltip(), None);
     }
 
     fn click_option(ws: &mut Workspace, wanted: AfterSelect) -> Outcome {

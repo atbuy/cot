@@ -11,7 +11,7 @@ use crate::geometry::Rect;
 use crate::image::Image;
 use crate::palette::{ACCENT, ANNOTATION, SURFACE, TEXT};
 use crate::settings::AfterSelect;
-use crate::toolbar::{Button, Hover, SettingsPanel, Toolbar};
+use crate::toolbar::{Button, Hover, SettingsPanel, Toolbar, TOOLTIP_PAD_X};
 
 const STROKE: f64 = 3.0;
 const HIGHLIGHT_STROKE: f64 = 20.0;
@@ -271,9 +271,14 @@ fn trace_icon(cr: &cairo::Context, button: Button) -> Drawn {
     cr.stroke()
 }
 
+/// The font of toolbar text, for measuring it before drawing.
+pub fn label_font() -> pango::FontDescription {
+    font(LABEL_SIZE, false)
+}
+
 fn draw_label(cr: &cairo::Context, text: &str, x: f64, center_y: f64, hex: u32, alpha: f64) -> Drawn {
     let layout = pangocairo::functions::create_layout(cr);
-    layout.set_font_description(Some(&font(LABEL_SIZE, false)));
+    layout.set_font_description(Some(&label_font()));
     layout.set_text(text);
     let (_, height) = layout.pixel_size();
     set_color(cr, hex, alpha);
@@ -311,6 +316,14 @@ pub fn draw_toolbar(cr: &cairo::Context, bar: &Toolbar, state: &BarState) -> Dra
         cr.restore()?;
     }
     Ok(())
+}
+
+/// Draws a tooltip in global logical coordinates.
+pub fn draw_tooltip(cr: &cairo::Context, rect: &Rect, text: &str) -> Drawn {
+    draw_chrome(cr, rect)?;
+    let x = f64::from(rect.x + TOOLTIP_PAD_X);
+    let center_y = f64::from(rect.y) + f64::from(rect.h) / 2.0;
+    draw_label(cr, text, x, center_y, TEXT, 1.0)
 }
 
 /// Draws the settings panel in global logical coordinates.
