@@ -54,7 +54,7 @@ impl Selector {
         self.pointer
     }
 
-    fn monitor_under_pointer(&self) -> Option<Rect> {
+    pub fn monitor_under_pointer(&self) -> Option<Rect> {
         self.monitors.iter().copied().find(|m| m.contains(self.pointer))
     }
 
@@ -159,6 +159,16 @@ impl Selector {
         !matches!(self.mode, Mode::Idle | Mode::Settled(_))
     }
 
+    /// Whether the user is positioning a selection edge right now. A press
+    /// that hasn't moved yet may still be a click, so it doesn't count.
+    pub fn is_placing_edge(&self) -> bool {
+        match self.mode {
+            Mode::Drawing { .. } => !self.is_click(),
+            Mode::Resizing { .. } => true,
+            _ => false,
+        }
+    }
+
     pub fn shows_handles(&self) -> bool {
         matches!(
             self.mode,
@@ -247,6 +257,26 @@ mod tests {
         assert!(s.shows_handles());
         assert!(!s.is_dragging());
         assert_eq!(s.confirmed(), rect(100, 200, 300, 300));
+    }
+
+    #[test]
+    fn placing_an_edge_means_drawing_or_resizing_only() {
+        let mut s = selector();
+        s.set_pointer((100, 200));
+        s.press();
+        assert!(!s.is_placing_edge());
+        s.set_pointer((400, 500));
+        assert!(s.is_placing_edge());
+        s.release();
+        assert!(!s.is_placing_edge());
+        s.set_pointer((250, 350));
+        s.press();
+        s.set_pointer((260, 360));
+        assert!(!s.is_placing_edge());
+        s.release();
+        s.set_pointer((110, 360));
+        s.press();
+        assert!(s.is_placing_edge());
     }
 
     #[test]

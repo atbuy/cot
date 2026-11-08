@@ -1,6 +1,7 @@
 mod editor;
 mod geometry;
 mod image;
+mod magnifier;
 mod overlay;
 mod palette;
 mod render;

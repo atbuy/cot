@@ -85,6 +85,15 @@ impl Image {
         })
     }
 
+    /// The color of one pixel, or `None` outside the image.
+    pub fn pixel(&self, x: i32, y: i32) -> Option<[u8; 3]> {
+        if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {
+            return None;
+        }
+        let i = (y as usize * self.width as usize + x as usize) * 3;
+        Some([self.rgb[i], self.rgb[i + 1], self.rgb[i + 2]])
+    }
+
     /// Copies out a rectangle, clipped to the image. `None` if nothing is left.
     pub fn crop(&self, rect: &Rect) -> Option<Image> {
         let full = Rect {
@@ -306,6 +315,14 @@ mod tests {
     fn pixel_at(image: &Image, x: usize, y: usize) -> [u8; 3] {
         let i = (y * image.width as usize + x) * 3;
         [image.rgb[i], image.rgb[i + 1], image.rgb[i + 2]]
+    }
+
+    #[test]
+    fn pixel_reads_inside_the_image_only() {
+        let image = sample();
+        assert_eq!(image.pixel(1, 1), Some([4, 0, 255]));
+        assert_eq!(image.pixel(3, 0), None);
+        assert_eq!(image.pixel(0, -1), None);
     }
 
     #[test]

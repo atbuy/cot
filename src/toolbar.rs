@@ -21,6 +21,7 @@ const TOOLTIP_GAP: i32 = 6;
 const PANEL_WIDTH: i32 = 320;
 const PANEL_TITLE: i32 = 30;
 const PANEL_ROW: i32 = 38;
+const PANEL_SECTION_GAP: i32 = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Button {
@@ -74,6 +75,7 @@ const GROUPS: [&[Button]; 4] = [
 pub enum Hover {
     Button(Button),
     Option(AfterSelect),
+    MagnifierToggle,
 }
 
 pub struct Toolbar {
@@ -85,6 +87,7 @@ pub struct Toolbar {
 pub struct SettingsPanel {
     pub rect: Rect,
     pub options: [(AfterSelect, &'static str, Rect); 2],
+    pub magnifier_toggle: Rect,
 }
 
 /// Places the toolbar on the monitor holding most of the selection: below the
@@ -156,7 +159,7 @@ impl Toolbar {
 
     /// The settings panel, on whichever side of the toolbar has room.
     pub fn panel(&self) -> SettingsPanel {
-        let h = 2 * PAD + PANEL_TITLE + 2 * PANEL_ROW;
+        let h = 2 * PAD + PANEL_TITLE + 3 * PANEL_ROW + PANEL_SECTION_GAP;
         let x = (self.rect.right() - PANEL_WIDTH)
             .min(self.monitor.right() - PANEL_WIDTH - SCREEN_MARGIN)
             .max(self.monitor.x + SCREEN_MARGIN);
@@ -178,12 +181,14 @@ impl Toolbar {
                 (AfterSelect::Edit, "Open the editor", row(0)),
                 (AfterSelect::Instant, "Copy right away, Shift to edit", row(1)),
             ],
+            magnifier_toggle: Rect { y: row(2).y + PANEL_SECTION_GAP, ..row(2) },
         }
     }
 }
 
 impl SettingsPanel {
     pub const TITLE: &'static str = "After selecting";
+    pub const MAGNIFIER_LABEL: &'static str = "Show magnifier while selecting";
 
     pub fn option_at(&self, p: (i32, i32)) -> Option<AfterSelect> {
         self.options.iter().find(|(_, _, r)| r.contains(p)).map(|(o, _, _)| *o)
@@ -290,6 +295,8 @@ mod tests {
         for (option, _, r) in &panel.options {
             assert!(inside(&panel.rect, r));
             assert_eq!(panel.option_at((r.x + 1, r.y + 1)), Some(*option));
+            assert!(r.intersect(&panel.magnifier_toggle).is_none());
         }
+        assert!(inside(&panel.rect, &panel.magnifier_toggle));
     }
 }

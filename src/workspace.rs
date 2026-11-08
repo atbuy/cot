@@ -3,6 +3,7 @@
 
 use crate::editor::{Editor, Shape, Tool};
 use crate::geometry::Rect;
+use crate::magnifier::Magnifier;
 use crate::selection::Selector;
 use crate::settings::{AfterSelect, Settings};
 use crate::toolbar::{self, Button, Hover, Toolbar};
@@ -126,6 +127,14 @@ impl Workspace {
         self.selector.is_dragging() || self.editor.is_drawing()
     }
 
+    pub fn magnifier(&self) -> Option<Magnifier> {
+        if !self.settings.magnifier || !self.selector.is_placing_edge() {
+            return None;
+        }
+        let monitor = self.selector.monitor_under_pointer()?;
+        Some(Magnifier::new(self.selector.pointer(), &monitor))
+    }
+
     pub fn shows_handles(&self) -> bool {
         self.selector.shows_handles() && self.editor.tool() == Tool::Select
     }
@@ -143,8 +152,12 @@ impl Workspace {
         }
         let bar = self.toolbar()?;
         if self.settings_open {
-            if let Some(option) = bar.panel().option_at(p) {
+            let panel = bar.panel();
+            if let Some(option) = panel.option_at(p) {
                 return Some(Hover::Option(option));
+            }
+            if panel.magnifier_toggle.contains(p) {
+                return Some(Hover::MagnifierToggle);
             }
         }
         bar.button_at(p).map(Hover::Button)
@@ -198,6 +211,10 @@ impl Workspace {
         if let Some(bar) = self.toolbar() {
             if self.settings_open {
                 let panel = bar.panel();
+                if panel.magnifier_toggle.contains(p) {
+                    self.settings.magnifier = !self.settings.magnifier;
+                    return Outcome::SaveSettings;
+                }
                 if panel.rect.contains(p) {
                     return match panel.option_at(p) {
                         Some(option) if option != self.settings.after_select => {
@@ -358,13 +375,13 @@ mod tests {
 
     #[test]
     fn instant_mode_copies_a_clicked_window() {
-        let mut ws = empty(Settings { after_select: AfterSelect::Instant });
+        let mut ws = empty(Settings { after_select: AfterSelect::Instant, ..Settings::default() });
         assert_eq!(click_at(&mut ws, (4000, 500)), Outcome::Finish(WINDOW));
     }
 
     #[test]
     fn instant_mode_does_nothing_on_empty_desktop() {
-        let mut ws = empty(Settings { after_select: AfterSelect::Instant });
+        let mut ws = empty(Settings { after_select: AfterSelect::Instant, ..Settings::default() });
         assert_eq!(click_at(&mut ws, (3450, 900)), Outcome::Continue);
         assert_eq!(ws.selection(), None);
     }
@@ -406,20 +423,20 @@ mod tests {
 
     #[test]
     fn instant_mode_finishes_on_release() {
-        let mut ws = empty(Settings { after_select: AfterSelect::Instant });
+        let mut ws = empty(Settings { after_select: AfterSelect::Instant, ..Settings::default() });
         assert_eq!(drag(&mut ws, (100, 200), (400, 500), false), Outcome::Finish(SELECTION));
     }
 
     #[test]
     fn instant_mode_with_shift_opens_the_editor() {
-        let mut ws = empty(Settings { after_select: AfterSelect::Instant });
+        let mut ws = empty(Settings { after_select: AfterSelect::Instant, ..Settings::default() });
         assert_eq!(drag(&mut ws, (100, 200), (400, 500), true), Outcome::Continue);
         assert!(ws.toolbar().is_some());
     }
 
     #[test]
     fn instant_mode_does_not_finish_when_adjusting() {
-        let mut ws = empty(Settings { after_select: AfterSelect::Instant });
+        let mut ws = empty(Settings { after_select: AfterSelect::Instant, ..Settings::default() });
         drag(&mut ws, (100, 200), (400, 500), true);
         assert_eq!(drag(&mut ws, (250, 350), (260, 360), false), Outcome::Continue);
     }
@@ -611,6 +628,63 @@ mod tests {
         ws.pointer_moved((r.x + 2, r.y + 2));
         assert_eq!(ws.hover(), None);
         assert_eq!(ws.pending_tooltip(), None);
+    }
+
+    #[test]
+    fn the_magnifier_shows_while_drawing_after_a_real_drag() {
+        let mut ws = empty(Settings::default());
+        ws.pointer_moved((100, 200));
+        ws.press();
+        assert!(ws.magnifier().is_none());
+        ws.pointer_moved((400, 500));
+        assert_eq!(ws.magnifier().unwrap().center, (400, 500));
+        ws.release(false);
+        assert!(ws.magnifier().is_none());
+    }
+
+    #[test]
+    fn the_magnifier_shows_while_resizing_but_not_moving() {
+        let mut ws = selected();
+        ws.pointer_moved((250, 350));
+        ws.press();
+        ws.pointer_moved((260, 360));
+        assert!(ws.magnifier().is_none());
+        ws.release(false);
+        ws.pointer_moved((110, 360));
+        ws.press();
+        ws.pointer_moved((90, 360));
+        assert!(ws.magnifier().is_some());
+    }
+
+    #[test]
+    fn the_magnifier_stays_away_from_a_window_click() {
+        let mut ws = empty(Settings::default());
+        ws.pointer_moved((4000, 500));
+        ws.press();
+        assert!(ws.magnifier().is_none());
+    }
+
+    #[test]
+    fn the_magnifier_can_be_turned_off() {
+        let mut ws = empty(Settings { magnifier: false, ..Settings::default() });
+        ws.pointer_moved((100, 200));
+        ws.press();
+        ws.pointer_moved((400, 500));
+        assert!(ws.magnifier().is_none());
+    }
+
+    #[test]
+    fn the_settings_panel_toggles_the_magnifier_and_saves() {
+        let mut ws = selected();
+        click_button(&mut ws, Button::Settings);
+        let r = ws.toolbar().unwrap().panel().magnifier_toggle;
+        ws.pointer_moved((r.x + 2, r.y + 2));
+        assert_eq!(ws.hover(), Some(Hover::MagnifierToggle));
+        assert_eq!(ws.press(), Outcome::SaveSettings);
+        assert!(!ws.settings().magnifier);
+        ws.release(false);
+        assert_eq!(ws.press(), Outcome::SaveSettings);
+        assert!(ws.settings().magnifier);
     }
 
     fn click_option(ws: &mut Workspace, wanted: AfterSelect) -> Outcome {

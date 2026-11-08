@@ -9,6 +9,7 @@ use gtk::{cairo, pango};
 use crate::editor::{Shape, Tool};
 use crate::geometry::{to_image_pixels, Rect};
 use crate::image::Image;
+use crate::magnifier::{self, Magnifier};
 use crate::palette::{ACCENT, ANNOTATION, SURFACE, TEXT};
 use crate::settings::AfterSelect;
 use crate::toolbar::{Button, Hover, SettingsPanel, Toolbar, TOOLTIP_PAD_X};
@@ -211,6 +212,7 @@ pub struct BarState {
     pub settings_open: bool,
     pub hover: Option<Hover>,
     pub after_select: AfterSelect,
+    pub magnifier: bool,
 }
 
 fn fill_rect(cr: &cairo::Context, r: &Rect, hex: u32, alpha: f64) -> Drawn {
@@ -419,7 +421,57 @@ pub fn draw_settings(cr: &cairo::Context, panel: &SettingsPanel, state: &BarStat
         }
         draw_label(cr, label, radio_x + RADIO + INDENT, center_y, TEXT, 1.0)?;
     }
-    Ok(())
+
+    let r = &panel.magnifier_toggle;
+    if state.hover == Some(Hover::MagnifierToggle) {
+        fill_rect(cr, r, TEXT, HOVER_ALPHA)?;
+    }
+    let center_y = f64::from(r.y) + f64::from(r.h) / 2.0;
+    let box_x = f64::from(r.x) + INDENT;
+    let side = 2.0 * RADIO;
+    cr.new_path();
+    set_color(cr, ACCENT, 1.0);
+    cr.set_line_width(1.8);
+    cr.rectangle(box_x, center_y - RADIO, side, side);
+    cr.stroke()?;
+    if state.magnifier {
+        cr.rectangle(box_x + 3.5, center_y - RADIO + 3.5, side - 7.0, side - 7.0);
+        cr.fill()?;
+    }
+    draw_label(cr, SettingsPanel::MAGNIFIER_LABEL, box_x + side + INDENT, center_y, TEXT, 1.0)
+}
+
+/// Draws the magnifier. `source` is the pixel of `frame` under the pointer.
+pub fn draw_magnifier(cr: &cairo::Context, m: &Magnifier, frame: &Image, source: (i32, i32)) -> Drawn {
+    use magnifier::{LABEL_HEIGHT, PAD, RADIUS, ZOOM};
+    draw_chrome(cr, &m.rect)?;
+    let (grid_x, grid_y) = (m.rect.x + PAD, m.rect.y + PAD);
+    let cell = |index: i32, start: i32| f64::from(start + (index + RADIUS) * ZOOM);
+    let size = f64::from(ZOOM);
+    for dy in -RADIUS..=RADIUS {
+        for dx in -RADIUS..=RADIUS {
+            // Beyond the edge of the screen there is nothing to show.
+            let [r, g, b] = frame.pixel(source.0 + dx, source.1 + dy).unwrap_or([0, 0, 0]);
+            cr.set_source_rgb(f64::from(r) / 255.0, f64::from(g) / 255.0, f64::from(b) / 255.0);
+            cr.rectangle(cell(dx, grid_x), cell(dy, grid_y), size, size);
+            cr.fill()?;
+        }
+    }
+
+    // Tint the row and column through the target, then outline the pixel.
+    let grid = f64::from((2 * RADIUS + 1) * ZOOM);
+    set_color(cr, ACCENT, 0.3);
+    cr.rectangle(cell(0, grid_x), f64::from(grid_y), size, grid);
+    cr.rectangle(f64::from(grid_x), cell(0, grid_y), grid, size);
+    cr.fill()?;
+    set_color(cr, ACCENT, 1.0);
+    cr.set_line_width(1.0);
+    cr.rectangle(cell(0, grid_x) + 0.5, cell(0, grid_y) + 0.5, size - 1.0, size - 1.0);
+    cr.stroke()?;
+
+    let label = format!("{}, {}", m.center.0, m.center.1);
+    let center_y = f64::from(m.rect.bottom() - PAD - LABEL_HEIGHT / 2);
+    draw_label(cr, &label, f64::from(grid_x), center_y, TEXT, 1.0)
 }
 
 #[cfg(test)]
@@ -535,6 +587,31 @@ mod tests {
             Shape::BlackBar { a: (10, 10), b: (70, 70) },
         ];
         assert_eq!(pixel(&flatten_stripes(shapes, rect(0, 0, 100, 100)), 20, 40), [0, 0, 0]);
+    }
+
+    #[test]
+    fn the_magnifier_shows_zoomed_frame_pixels_even_at_the_screen_corner() {
+        let mut frame = black(40, 40);
+        let (x, y) = (5, 5);
+        frame.rgb[(y * 40 + x + 3) * 3] = 200; // red, three pixels right of the source
+        let m = Magnifier::new((5, 5), &rect(0, 0, 400, 400));
+        let surface = cairo::ImageSurface::create(cairo::Format::Rgb24, 400, 400).unwrap();
+        {
+            let cr = cairo::Context::new(&surface).unwrap();
+            draw_magnifier(&cr, &m, &frame, (5, 5)).unwrap();
+        }
+        let mut surface = surface;
+        surface.flush();
+        let stride = surface.stride() as usize;
+        let data = surface.data().unwrap();
+        use magnifier::{PAD, RADIUS, ZOOM};
+        // The red pixel's cell sits on the tinted center row, so compare it
+        // with its neighbor on that same row.
+        let cx = (m.rect.x + PAD + (RADIUS + 3) * ZOOM + ZOOM / 2) as usize;
+        let cy = (m.rect.y + PAD + RADIUS * ZOOM + ZOOM / 2) as usize;
+        let lit = data[cy * stride + cx * 4 + 2];
+        let plain = data[cy * stride + (cx + ZOOM as usize) * 4 + 2];
+        assert!(lit > plain, "red source pixel missing: {lit} vs {plain}");
     }
 
     #[test]

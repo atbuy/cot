@@ -171,6 +171,7 @@ mod imp {
             let selection = session.selection();
             let Some(clipped) = selection.and_then(|s| s.intersect(monitor)) else {
                 snapshot.append_color(&DIM, &whole);
+                self.draw_magnifier(snapshot, session, monitor);
                 return;
             };
 
@@ -220,6 +221,7 @@ mod imp {
             }
 
             self.draw_toolbar(snapshot, session, monitor);
+            self.draw_magnifier(snapshot, session, monitor);
         }
     }
 
@@ -267,6 +269,20 @@ mod imp {
             }
         }
 
+        fn draw_magnifier(&self, snapshot: &gtk::Snapshot, session: &Session, monitor: &Rect) {
+            let workspace = session.workspace.borrow();
+            let Some(magnifier) = workspace.magnifier() else { return };
+            if !monitor.contains(magnifier.center) {
+                return;
+            }
+            let (x, y) = magnifier.center;
+            let source = to_image_pixels(&Rect { x, y, w: 1, h: 1 }, &session.bounds, session.frame.width);
+            let cr = global_cairo(snapshot, &magnifier.rect, monitor);
+            if let Err(e) = render::draw_magnifier(&cr, &magnifier, &session.frame, (source.x, source.y)) {
+                eprintln!("cot: could not draw magnifier: {e}");
+            }
+        }
+
         fn draw_toolbar(&self, snapshot: &gtk::Snapshot, session: &Session, monitor: &Rect) {
             let workspace = session.workspace.borrow();
             let Some(bar) = workspace.toolbar() else { return };
@@ -281,6 +297,7 @@ mod imp {
                 settings_open: workspace.settings_open(),
                 hover: workspace.hover(),
                 after_select: workspace.settings().after_select,
+                magnifier: workspace.settings().magnifier,
             };
             let cr = global_cairo(snapshot, &bar.rect, monitor);
             if let Err(e) = render::draw_toolbar(&cr, &bar, &state) {

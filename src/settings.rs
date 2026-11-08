@@ -12,9 +12,20 @@ pub enum AfterSelect {
     Instant,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Settings {
     pub after_select: AfterSelect,
+    /// Whether to show the magnifier while drawing or resizing a selection.
+    pub magnifier: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings {
+            after_select: AfterSelect::default(),
+            magnifier: true,
+        }
+    }
 }
 
 impl Settings {
@@ -22,8 +33,10 @@ impl Settings {
         let mut settings = Settings::default();
         for line in text.lines() {
             let Some((key, value)) = line.split_once('=') else { continue };
-            if key.trim() == "after_select" && value.trim().trim_matches('"') == "instant" {
-                settings.after_select = AfterSelect::Instant;
+            match (key.trim(), value.trim().trim_matches('"')) {
+                ("after_select", "instant") => settings.after_select = AfterSelect::Instant,
+                ("magnifier", "false") => settings.magnifier = false,
+                _ => {}
             }
         }
         settings
@@ -34,7 +47,7 @@ impl Settings {
             AfterSelect::Edit => "edit",
             AfterSelect::Instant => "instant",
         };
-        format!("after_select = \"{after_select}\"\n")
+        format!("after_select = \"{after_select}\"\nmagnifier = {}\n", self.magnifier)
     }
 
     fn path() -> Option<PathBuf> {
@@ -72,10 +85,18 @@ mod tests {
     }
 
     #[test]
+    fn the_magnifier_is_on_unless_turned_off() {
+        assert!(Settings::parse("after_select = \"edit\"\n").magnifier);
+        assert!(!Settings::parse("magnifier = false\n").magnifier);
+    }
+
+    #[test]
     fn round_trips() {
         for after_select in [AfterSelect::Edit, AfterSelect::Instant] {
-            let settings = Settings { after_select };
-            assert_eq!(Settings::parse(&settings.serialize()), settings);
+            for magnifier in [true, false] {
+                let settings = Settings { after_select, magnifier };
+                assert_eq!(Settings::parse(&settings.serialize()), settings);
+            }
         }
     }
 }
