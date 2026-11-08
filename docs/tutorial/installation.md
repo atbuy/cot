@@ -1,8 +1,32 @@
 # Installation
 
-cot is built from source. It is developed on Arch Linux with Hyprland. See [Compatibility](../reference/compatibility.md) for what else may work.
+cot is developed on Arch Linux with Hyprland. See [Compatibility](../reference/compatibility.md) for what else may work.
 
-## Dependencies
+## Install with the script
+
+```bash title="Install latest"
+curl -fsSL https://raw.githubusercontent.com/atbuy/cot/main/install.sh | sh
+```
+
+```bash title="Install a specific version"
+curl -fsSL https://raw.githubusercontent.com/atbuy/cot/main/install.sh | sh -s -- --version v0.1.0
+```
+
+```bash title="Install system-wide"
+curl -fsSL https://raw.githubusercontent.com/atbuy/cot/main/install.sh | sh -s -- --system
+```
+
+The script downloads the release for your distribution, verifies its checksum, and installs to `~/.local/bin/cot`, or `/usr/local/bin/cot` with `--system`. If a dependency is missing, it prints the command to install it.
+
+To update later, run:
+
+```bash
+cot self update
+```
+
+## Build from source
+
+### Dependencies
 
 | Package              | Why cot needs it                                  |
 | -------------------- | ------------------------------------------------- |
@@ -19,7 +43,7 @@ sudo pacman -S --needed base-devel git rust grim wl-clipboard gtk4 gtk4-layer-sh
 
 Window snapping also uses `hyprctl`, which comes with Hyprland.
 
-## Build and install
+### Build and install
 
 ```bash
 git clone https://github.com/atbuy/cot
@@ -33,7 +57,7 @@ make install
 
     To update, run `git pull` and `make install` again. The keybind keeps launching the old build until you do.
 
-## Install somewhere else
+### Install somewhere else
 
 Set `PREFIX` to change the location. The binary goes in `$PREFIX/bin`:
 

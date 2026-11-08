@@ -27,6 +27,8 @@ The tests don't need a display. Selection, toolbar and input handling are kept f
 | `src/palette.rs`   | Themes and active colors                          |
 | `src/windows.rs`   | Reading windows from Hyprland                     |
 | `src/geometry.rs`  | Rectangles and coordinate conversion              |
+| `src/update.rs`    | `cot self update`                                 |
+| `src/version.rs`   | Version information                               |
 
 ## Documentation
 
@@ -47,3 +49,14 @@ Two GitHub Actions workflows run on pushes to `main` and on pull requests:
 - `docs.yml` builds the site, and publishes it to GitHub Pages on pushes to `main`.
 
 Publishing needs GitHub Pages enabled for the repository, with **GitHub Actions** as its source.
+
+## Releasing
+
+Push a version tag to publish a release:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+`release.yml` runs clippy and the tests, builds for Arch and Ubuntu 26.04, and publishes the archives with a `checksums.txt`. The tag becomes the version shown by `cot version`. GTK is linked dynamically, so each distribution release needs its own build.

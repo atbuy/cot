@@ -8,6 +8,8 @@ mod render;
 mod selection;
 mod settings;
 mod toolbar;
+mod update;
+mod version;
 mod windows;
 mod workspace;
 
@@ -20,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 use std::rc::Rc;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use gtk::glib;
 
 use crate::image::Image;
@@ -36,8 +38,11 @@ use crate::workspace::Action;
 /// Esc or right-click cancels. Colors and the save folder can be set in
 /// ~/.config/cot/config.toml.
 #[derive(Parser)]
-#[command(version)]
+#[command(version = version::VERSION, args_conflicts_with_subcommands = true)]
 struct Args {
+    #[command(subcommand)]
+    command: Option<Commands>,
+
     /// Skip selection and take all monitors
     #[arg(long)]
     full: bool,
@@ -49,6 +54,26 @@ struct Args {
     /// Write the PNG to this path instead of the clipboard or screenshots folder
     #[arg(short, long, value_name = "PATH")]
     output: Option<PathBuf>,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Print version information
+    Version,
+
+    /// Manage this installation of cot
+    #[command(name = "self", subcommand)]
+    Manage(SelfCommand),
+}
+
+#[derive(Subcommand)]
+enum SelfCommand {
+    /// Update to the latest release
+    Update {
+        /// Install the latest release even if it isn't newer, or over a build from source
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 /// Holds an abstract socket for the life of the process, so that a second
@@ -111,6 +136,15 @@ fn save_screenshot(png: &[u8], folder: Option<&Path>) -> Result<(), Box<dyn Erro
 }
 
 fn run(args: Args) -> Result<(), Box<dyn Error>> {
+    match args.command {
+        Some(Commands::Version) => {
+            println!("{}", version::describe());
+            return Ok(());
+        }
+        Some(Commands::Manage(SelfCommand::Update { force })) => return update::self_update(force),
+        None => {}
+    }
+
     let Some(_lock) = acquire_instance_lock()? else {
         return Ok(());
     };

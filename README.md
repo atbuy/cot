@@ -14,10 +14,7 @@ Documentation: [https://atbuy.github.io/cot/](https://atbuy.github.io/cot/)
 On Arch Linux with Hyprland:
 
 ```bash
-sudo pacman -S --needed base-devel git rust grim wl-clipboard gtk4 gtk4-layer-shell
-git clone https://github.com/atbuy/cot
-cd cot
-make install
+curl -fsSL https://raw.githubusercontent.com/atbuy/cot/main/install.sh | sh
 ```
 
 Bind `~/.local/bin/cot` to a key in your Hyprland config, press it, drag across an area, and press Enter to copy it.
