@@ -1,6 +1,9 @@
 //! Annotations and their undo history, in global logical coordinates so they
 //! stay put on the frozen screen when the selection is moved.
 
+use crate::geometry::Rect;
+use crate::image::Effect;
+
 type Point = (i32, i32);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -11,6 +14,9 @@ pub enum Tool {
     Freehand,
     Highlighter,
     Text,
+    BlackBar,
+    Blur,
+    Pixelate,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -20,6 +26,8 @@ pub enum Shape {
     Freehand(Vec<Point>),
     Highlighter(Vec<Point>),
     Text { at: Point, text: String },
+    BlackBar { a: Point, b: Point },
+    Effect { effect: Effect, a: Point, b: Point },
 }
 
 /// Shorter drags than this are slips of the mouse, not arrows or rectangles.
@@ -32,6 +40,18 @@ impl Shape {
             Shape::Arrow { from: a, to: b } | Shape::Rectangle { a, b } => spans(a, b),
             Shape::Freehand(points) | Shape::Highlighter(points) => points.len() >= 2,
             Shape::Text { text, .. } => !text.trim().is_empty(),
+            // A redaction has to cover an area, a line would hide nothing.
+            Shape::BlackBar { a, b } | Shape::Effect { a, b, .. } => {
+                (a.0 - b.0).abs() >= MIN_EXTENT && (a.1 - b.1).abs() >= MIN_EXTENT
+            }
+        }
+    }
+
+    /// The effect this shape applies to the pixels underneath, if any.
+    pub fn effect(&self) -> Option<(Effect, Rect)> {
+        match self {
+            Shape::Effect { effect, a, b } => Some((*effect, Rect::from_points(*a, *b))),
+            _ => None,
         }
     }
 }
@@ -79,12 +99,18 @@ impl Editor {
             Tool::Freehand => Some(Shape::Freehand(vec![p])),
             Tool::Highlighter => Some(Shape::Highlighter(vec![p])),
             Tool::Text => Some(Shape::Text { at: p, text: String::new() }),
+            Tool::BlackBar => Some(Shape::BlackBar { a: p, b: p }),
+            Tool::Blur => Some(Shape::Effect { effect: Effect::Blur, a: p, b: p }),
+            Tool::Pixelate => Some(Shape::Effect { effect: Effect::Pixelate, a: p, b: p }),
         };
     }
 
     pub fn drag(&mut self, p: Point) {
         match &mut self.in_progress {
-            Some(Shape::Arrow { to: end, .. }) | Some(Shape::Rectangle { b: end, .. }) => *end = p,
+            Some(Shape::Arrow { to: end, .. })
+            | Some(Shape::Rectangle { b: end, .. })
+            | Some(Shape::BlackBar { b: end, .. })
+            | Some(Shape::Effect { b: end, .. }) => *end = p,
             Some(Shape::Freehand(points)) | Some(Shape::Highlighter(points)) => {
                 if points.last() != Some(&p) {
                     points.push(p);
@@ -242,6 +268,35 @@ mod tests {
         e.undo();
         assert!(!e.is_typing());
         assert_eq!(e.done().len(), 1);
+    }
+
+    #[test]
+    fn each_redaction_tool_makes_its_shape() {
+        for (tool, a, b) in [(Tool::BlackBar, (1, 2), (30, 40)), (Tool::Blur, (1, 2), (30, 40)), (Tool::Pixelate, (30, 40), (1, 2))] {
+            let mut e = Editor::new();
+            e.set_tool(tool);
+            e.press(a);
+            e.drag(b);
+            e.commit();
+            assert_eq!(e.done().len(), 1);
+        }
+    }
+
+    #[test]
+    fn effects_report_a_normalized_area() {
+        let shape = Shape::Effect { effect: Effect::Blur, a: (30, 40), b: (10, 5) };
+        assert_eq!(shape.effect(), Some((Effect::Blur, Rect { x: 10, y: 5, w: 20, h: 35 })));
+        assert_eq!(Shape::Arrow { from: (0, 0), to: (9, 9) }.effect(), None);
+    }
+
+    #[test]
+    fn a_redaction_needs_an_area() {
+        let mut e = Editor::new();
+        e.set_tool(Tool::BlackBar);
+        e.press((0, 0));
+        e.drag((100, 1));
+        e.commit();
+        assert!(e.done().is_empty());
     }
 
     #[test]

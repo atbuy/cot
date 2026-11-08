@@ -333,6 +333,14 @@ mod tests {
     }
 
     #[test]
+    fn a_redaction_tool_covers_the_dragged_area() {
+        let mut ws = selected();
+        click_button(&mut ws, Button::Tool(Tool::BlackBar));
+        drag(&mut ws, (150, 250), (300, 400), false);
+        assert_eq!(ws.finished_shapes(), [Shape::BlackBar { a: (150, 250), b: (300, 400) }]);
+    }
+
+    #[test]
     fn a_tool_ignores_presses_outside_the_selection() {
         let mut ws = selected();
         click_button(&mut ws, Button::Tool(Tool::Arrow));

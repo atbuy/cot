@@ -85,7 +85,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
             return Ok(());
         };
         let mut cropped = frame.crop(&capture.region).ok_or("the selected region is empty")?;
-        render::flatten(&mut cropped, &capture)?;
+        render::flatten(&mut cropped, &capture, &frame)?;
         Rc::new(cropped)
     };
 

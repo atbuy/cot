@@ -1,6 +1,6 @@
 //! Rectangles in the compositor's global logical coordinate space.
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Rect {
     pub x: i32,
     pub y: i32,

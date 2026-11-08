@@ -7,7 +7,7 @@ use std::f64::consts::{PI, TAU};
 use gtk::{cairo, pango};
 
 use crate::editor::{Shape, Tool};
-use crate::geometry::Rect;
+use crate::geometry::{to_image_pixels, Rect};
 use crate::image::Image;
 use crate::palette::{ACCENT, ANNOTATION, SURFACE, TEXT};
 use crate::settings::AfterSelect;
@@ -98,7 +98,10 @@ fn draw_text(cr: &cairo::Context, at: (i32, i32), text: &str, caret: bool) -> Dr
 }
 
 /// Draws one annotation in global logical coordinates.
-pub fn draw_shape(cr: &cairo::Context, shape: &Shape, caret: bool) -> Drawn {
+///
+/// A finished blur or pixelate draws nothing here, as those are applied to the
+/// pixels underneath. While one is being dragged out, its outline is shown.
+pub fn draw_shape(cr: &cairo::Context, shape: &Shape, in_progress: bool) -> Drawn {
     cr.set_line_cap(cairo::LineCap::Round);
     cr.set_line_join(cairo::LineJoin::Round);
     cr.set_line_width(STROKE);
@@ -120,7 +123,25 @@ pub fn draw_shape(cr: &cairo::Context, shape: &Shape, caret: bool) -> Drawn {
             trace_points(cr, points);
             cr.stroke()
         }
-        Shape::Text { at, text } => draw_text(cr, *at, text, caret),
+        Shape::Text { at, text } => draw_text(cr, *at, text, in_progress),
+        Shape::BlackBar { a, b } => {
+            let r = Rect::from_points(*a, *b);
+            // Solid to the last pixel: a soft edge would blend the original in.
+            cr.save()?;
+            cr.set_antialias(cairo::Antialias::None);
+            cr.set_source_rgb(0.0, 0.0, 0.0);
+            cr.rectangle(f64::from(r.x), f64::from(r.y), f64::from(r.w), f64::from(r.h));
+            cr.fill()?;
+            cr.restore()
+        }
+        Shape::Effect { a, b, .. } => {
+            if in_progress {
+                let r = Rect::from_points(*a, *b);
+                cr.rectangle(f64::from(r.x), f64::from(r.y), f64::from(r.w), f64::from(r.h));
+                cr.stroke()?;
+            }
+            Ok(())
+        }
     }
 }
 
@@ -133,10 +154,18 @@ pub struct Capture {
     pub scale: f64,
 }
 
-/// Paints the annotations permanently into the cropped image.
-pub fn flatten(image: &mut Image, capture: &Capture) -> Result<(), Box<dyn Error>> {
+/// Paints the annotations permanently into the cropped image. Blur and
+/// pixelate go in first, as a layer directly on the screenshot, then every
+/// other shape on top in the order it was drawn.
+pub fn flatten(image: &mut Image, capture: &Capture, frame: &Image) -> Result<(), Box<dyn Error>> {
     if capture.shapes.is_empty() {
         return Ok(());
+    }
+    for (effect, rect) in capture.shapes.iter().filter_map(Shape::effect) {
+        let area = to_image_pixels(&rect, &capture.bounds, frame.width);
+        if let Some(patch) = frame.redacted(&area, effect, capture.scale) {
+            image.paste(&patch, area.x - capture.region.x, area.y - capture.region.y);
+        }
     }
     let (width, height) = (image.width as usize, image.height as usize);
     let mut surface = cairo::ImageSurface::create(cairo::Format::Rgb24, width as i32, height as i32)?;
@@ -246,6 +275,28 @@ fn trace_icon(cr: &cairo::Context, button: Button) -> Drawn {
         Button::Tool(Tool::Text) => {
             segment(-7.0, -8.0, 7.0, -8.0);
             segment(0.0, -8.0, 0.0, 9.0);
+        }
+        Button::Tool(Tool::BlackBar) => {
+            cr.rectangle(-9.0, -4.0, 18.0, 8.0);
+            cr.fill()?;
+        }
+        Button::Tool(Tool::Blur) => {
+            cr.move_to(0.0, -9.0);
+            cr.curve_to(3.0, -4.0, 7.0, 0.0, 7.0, 4.0);
+            cr.curve_to(7.0, 8.0, 3.0, 9.0, 0.0, 9.0);
+            cr.curve_to(-3.0, 9.0, -7.0, 8.0, -7.0, 4.0);
+            cr.curve_to(-7.0, 0.0, -3.0, -4.0, 0.0, -9.0);
+            cr.close_path();
+        }
+        Button::Tool(Tool::Pixelate) => {
+            for row in 0..3 {
+                for column in 0..3 {
+                    if (row + column) % 2 == 0 {
+                        cr.rectangle(-8.5 + 6.0 * f64::from(column), -8.5 + 6.0 * f64::from(row), 5.0, 5.0);
+                    }
+                }
+            }
+            cr.fill()?;
         }
         Button::Undo | Button::Redo => {
             cr.save()?;
@@ -364,6 +415,7 @@ pub fn draw_settings(cr: &cairo::Context, panel: &SettingsPanel, state: &BarStat
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::image::Effect;
 
     fn black(width: u32, height: u32) -> Image {
         Image {
@@ -380,6 +432,15 @@ mod tests {
 
     const CYAN: [u8; 3] = [0x4D, 0xD8, 0xFF];
 
+    /// Flattens onto a black crop whose frame is black too.
+    fn flatten_black(image: &mut Image, capture: &Capture) {
+        let frame = black(
+            (f64::from(capture.bounds.w) * capture.scale) as u32,
+            (f64::from(capture.bounds.h) * capture.scale) as u32,
+        );
+        flatten(image, capture, &frame).unwrap();
+    }
+
     fn capture(shapes: Vec<Shape>, region: Rect, bounds: Rect, scale: f64) -> Capture {
         Capture { region, shapes, bounds, scale }
     }
@@ -388,10 +449,88 @@ mod tests {
         Rect { x, y, w, h }
     }
 
+    fn stripes(width: u32, height: u32) -> Image {
+        let rgb = (0..height)
+            .flat_map(|_| (0..width).flat_map(|x| [if x % 2 == 0 { 0u8 } else { 255 }; 3]))
+            .collect();
+        Image { width, height, rgb }
+    }
+
+    fn flatten_stripes(shapes: Vec<Shape>, region: Rect) -> Image {
+        let frame = stripes(100, 100);
+        let mut image = frame.crop(&region).unwrap();
+        flatten(&mut image, &capture(shapes, region, rect(0, 0, 100, 100), 1.0), &frame).unwrap();
+        image
+    }
+
+    #[test]
+    fn black_bar_replaces_every_pixel_exactly() {
+        let image = flatten_stripes(vec![Shape::BlackBar { a: (20, 20), b: (60, 50) }], rect(0, 0, 100, 100));
+        for y in 0..100 {
+            for x in 0..100 {
+                if (20..60).contains(&x) && (20..50).contains(&y) {
+                    assert_eq!(pixel(&image, x, y), [0, 0, 0], "uncovered pixel at {x},{y}");
+                }
+            }
+        }
+        // Stripes are untouched right outside the bar.
+        assert_eq!(pixel(&image, 61, 30), [255, 255, 255]);
+        assert_eq!(pixel(&image, 19, 30), [255, 255, 255]);
+    }
+
+    #[test]
+    fn black_bar_stays_solid_at_a_fractional_scale() {
+        let frame = stripes(150, 150);
+        let region = rect(0, 0, 150, 150);
+        let mut image = frame.crop(&region).unwrap();
+        let shapes = vec![Shape::BlackBar { a: (21, 21), b: (61, 51) }];
+        flatten(&mut image, &capture(shapes, region, rect(0, 0, 100, 100), 1.5), &frame).unwrap();
+        for y in 33..75 {
+            for x in 33..90 {
+                assert_eq!(pixel(&image, x, y), [0, 0, 0], "uncovered pixel at {x},{y}");
+            }
+        }
+    }
+
+    #[test]
+    fn pixelate_changes_only_its_area() {
+        let shapes = vec![Shape::Effect { effect: Effect::Pixelate, a: (10, 10), b: (42, 42) }];
+        let image = flatten_stripes(shapes, rect(0, 0, 100, 100));
+        assert_eq!(pixel(&image, 20, 20), [128, 128, 128]);
+        assert_eq!(pixel(&image, 21, 20), [128, 128, 128]);
+        assert_eq!(pixel(&image, 43, 20), [255, 255, 255]);
+    }
+
+    #[test]
+    fn an_effect_cut_by_the_selection_matches_the_uncut_one() {
+        let shapes = vec![Shape::Effect { effect: Effect::Blur, a: (10, 10), b: (70, 70) }];
+        let whole = flatten_stripes(shapes.clone(), rect(0, 0, 100, 100));
+        let cut = flatten_stripes(shapes, rect(40, 0, 60, 100));
+        assert_eq!(pixel(&cut, 5, 30), pixel(&whole, 45, 30));
+    }
+
+    #[test]
+    fn annotations_draw_over_an_effect_whatever_the_order() {
+        let shapes = vec![
+            Shape::Rectangle { a: (20, 20), b: (60, 60) },
+            Shape::Effect { effect: Effect::Pixelate, a: (10, 10), b: (70, 70) },
+        ];
+        assert_eq!(pixel(&flatten_stripes(shapes, rect(0, 0, 100, 100)), 20, 40), CYAN);
+    }
+
+    #[test]
+    fn a_later_black_bar_covers_an_earlier_annotation() {
+        let shapes = vec![
+            Shape::Rectangle { a: (20, 20), b: (60, 60) },
+            Shape::BlackBar { a: (10, 10), b: (70, 70) },
+        ];
+        assert_eq!(pixel(&flatten_stripes(shapes, rect(0, 0, 100, 100)), 20, 40), [0, 0, 0]);
+    }
+
     #[test]
     fn nothing_to_draw_leaves_the_image_alone() {
         let mut image = black(10, 10);
-        flatten(&mut image, &capture(vec![], rect(0, 0, 10, 10), rect(0, 0, 10, 10), 1.0)).unwrap();
+        flatten_black(&mut image, &capture(vec![], rect(0, 0, 10, 10), rect(0, 0, 10, 10), 1.0));
         assert_eq!(image, black(10, 10));
     }
 
@@ -400,7 +539,7 @@ mod tests {
         // Layout starts at -1440, the crop at frame pixel 1540, which is logical 100.
         let shapes = vec![Shape::Rectangle { a: (110, 20), b: (150, 60) }];
         let mut image = black(100, 100);
-        flatten(&mut image, &capture(shapes, rect(1540, 0, 100, 100), rect(-1440, 0, 6800, 2560), 1.0)).unwrap();
+        flatten_black(&mut image, &capture(shapes, rect(1540, 0, 100, 100), rect(-1440, 0, 6800, 2560), 1.0));
         assert_eq!(pixel(&image, 10, 40), CYAN);
         assert_eq!(pixel(&image, 30, 20), CYAN);
         assert_eq!(pixel(&image, 30, 40), [0, 0, 0]);
@@ -410,7 +549,7 @@ mod tests {
     fn annotations_follow_the_image_scale() {
         let shapes = vec![Shape::Rectangle { a: (10, 10), b: (30, 30) }];
         let mut image = black(100, 100);
-        flatten(&mut image, &capture(shapes, rect(0, 0, 100, 100), rect(0, 0, 50, 50), 2.0)).unwrap();
+        flatten_black(&mut image, &capture(shapes, rect(0, 0, 100, 100), rect(0, 0, 50, 50), 2.0));
         assert_eq!(pixel(&image, 20, 40), CYAN);
         assert_eq!(pixel(&image, 10, 40), [0, 0, 0]);
     }
@@ -419,7 +558,7 @@ mod tests {
     fn highlighter_is_translucent() {
         let shapes = vec![Shape::Highlighter(vec![(5, 50), (95, 50)])];
         let mut image = black(100, 100);
-        flatten(&mut image, &capture(shapes, rect(0, 0, 100, 100), rect(0, 0, 100, 100), 1.0)).unwrap();
+        flatten_black(&mut image, &capture(shapes, rect(0, 0, 100, 100), rect(0, 0, 100, 100), 1.0));
         let [r, g, b] = pixel(&image, 50, 50);
         assert!(r > 0 && r < CYAN[0] && g > 0 && g < CYAN[1] && b > 0 && b < CYAN[2]);
     }
@@ -433,7 +572,7 @@ mod tests {
         ];
         for shape in shapes {
             let mut image = black(100, 100);
-            flatten(&mut image, &capture(vec![shape], rect(0, 0, 100, 100), rect(0, 0, 100, 100), 1.0)).unwrap();
+            flatten_black(&mut image, &capture(vec![shape], rect(0, 0, 100, 100), rect(0, 0, 100, 100), 1.0));
             assert_ne!(image, black(100, 100));
         }
     }

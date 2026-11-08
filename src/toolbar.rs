@@ -39,6 +39,9 @@ impl Button {
             Button::Tool(Tool::Freehand) => "Freehand",
             Button::Tool(Tool::Highlighter) => "Highlighter",
             Button::Tool(Tool::Text) => "Text",
+            Button::Tool(Tool::BlackBar) => "Black bar (safest for sensitive info)",
+            Button::Tool(Tool::Blur) => "Blur",
+            Button::Tool(Tool::Pixelate) => "Pixelate",
             Button::Undo => "Undo (Ctrl+Z)",
             Button::Redo => "Redo (Ctrl+Y)",
             Button::Settings => "Settings",
@@ -46,7 +49,7 @@ impl Button {
     }
 }
 
-const GROUPS: [&[Button]; 3] = [
+const GROUPS: [&[Button]; 4] = [
     &[
         Button::Tool(Tool::Select),
         Button::Tool(Tool::Arrow),
@@ -54,6 +57,11 @@ const GROUPS: [&[Button]; 3] = [
         Button::Tool(Tool::Freehand),
         Button::Tool(Tool::Highlighter),
         Button::Tool(Tool::Text),
+    ],
+    &[
+        Button::Tool(Tool::BlackBar),
+        Button::Tool(Tool::Blur),
+        Button::Tool(Tool::Pixelate),
     ],
     &[Button::Undo, Button::Redo],
     &[Button::Settings],
@@ -239,7 +247,7 @@ mod tests {
     #[test]
     fn every_button_is_inside_the_toolbar_and_findable() {
         let bar = place(&rect(1000, 200, 400, 300), &monitors()).unwrap();
-        assert_eq!(bar.buttons.len(), 9);
+        assert_eq!(bar.buttons.len(), 12);
         for (button, r) in &bar.buttons {
             assert!(inside(&bar.rect, r));
             assert_eq!(bar.button_at((r.x + 1, r.y + 1)), Some(*button));

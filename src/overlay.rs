@@ -2,6 +2,7 @@
 //! let the user pick a region of it.
 
 use std::cell::{Cell, OnceCell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -14,7 +15,7 @@ use gtk::{graphene, EventControllerKey, EventControllerLegacy};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 
 use crate::geometry::{to_image_pixels, Rect};
-use crate::image::Image;
+use crate::image::{Effect, Image};
 use crate::palette;
 use crate::render::{self, BarState, Capture};
 use crate::settings::Settings;
@@ -42,7 +43,10 @@ const HANDLE_CORE: f32 = 6.0;
 /// State shared by the windows of all monitors.
 pub struct Session {
     app: gtk::Application,
+    frame: Rc<Image>,
     bounds: Rect,
+    /// Finished blurs and pixelates, so each is only computed once.
+    effects: RefCell<HashMap<(Effect, Rect), Option<gdk::Texture>>>,
     views: RefCell<Vec<FrozenView>>,
     workspace: RefCell<Workspace>,
     cursor: Cell<&'static str>,
@@ -53,6 +57,18 @@ pub struct Session {
 impl Session {
     fn selection(&self) -> Option<Rect> {
         self.workspace.borrow().selection()
+    }
+
+    fn effect_texture(&self, effect: Effect, rect: Rect) -> Option<gdk::Texture> {
+        self.effects
+            .borrow_mut()
+            .entry((effect, rect))
+            .or_insert_with(|| {
+                let area = to_image_pixels(&rect, &self.bounds, self.frame.width);
+                let scale = f64::from(self.frame.width) / f64::from(self.bounds.w);
+                self.frame.redacted(&area, effect, scale).map(texture_of)
+            })
+            .clone()
     }
 
     fn redraw(&self) {
@@ -223,11 +239,25 @@ mod imp {
             if editor.done().is_empty() && editor.in_progress().is_none() {
                 return;
             }
+
+            let area = |r: &Rect| {
+                graphene::Rect::new((r.x - monitor.x) as f32, (r.y - monitor.y) as f32, r.w as f32, r.h as f32)
+            };
+            snapshot.push_clip(&area(clipped));
+            for (effect, rect) in editor.done().iter().filter_map(|shape| shape.effect()) {
+                if rect.intersect(monitor).is_some() {
+                    if let Some(texture) = session.effect_texture(effect, rect) {
+                        snapshot.append_texture(&texture, &area(&rect));
+                    }
+                }
+            }
+            snapshot.pop();
+
             let cr = global_cairo(snapshot, clipped, monitor);
             let finished = editor.done().iter().map(|shape| (shape, false));
             let current = editor.in_progress().map(|shape| (shape, true));
-            for (shape, caret) in finished.chain(current) {
-                if let Err(e) = render::draw_shape(&cr, shape, caret) {
+            for (shape, in_progress) in finished.chain(current) {
+                if let Err(e) = render::draw_shape(&cr, shape, in_progress) {
                     eprintln!("cot: could not draw annotation: {e}");
                 }
             }
@@ -362,7 +392,9 @@ pub fn select_region(frame: Rc<Image>) -> Result<Option<Capture>, String> {
     let app = gtk::Application::new(Some("dev.atbuy.cot"), gio::ApplicationFlags::NON_UNIQUE);
     let session = Rc::new(Session {
         app: app.clone(),
+        frame: frame.clone(),
         bounds,
+        effects: RefCell::default(),
         views: RefCell::default(),
         workspace: RefCell::new(Workspace::new(rects, bounds, Settings::load())),
         cursor: Cell::new("crosshair"),
@@ -392,6 +424,18 @@ pub fn select_region(frame: Rc<Image>) -> Result<Option<Capture>, String> {
     }))
 }
 
+fn texture_of(image: Image) -> gdk::Texture {
+    let stride = image.width as usize * 3;
+    gdk::MemoryTexture::new(
+        image.width as i32,
+        image.height as i32,
+        gdk::MemoryFormat::R8g8b8,
+        &glib::Bytes::from_owned(image.rgb),
+        stride,
+    )
+    .upcast()
+}
+
 fn build_window(
     app: &gtk::Application,
     monitor: &gdk::Monitor,
@@ -400,17 +444,9 @@ fn build_window(
     session: &Rc<Session>,
 ) -> Option<gtk::ApplicationWindow> {
     let pixels = frame.crop(&to_image_pixels(&rect, &session.bounds, frame.width))?;
-    let stride = pixels.width as usize * 3;
-    let texture = gdk::MemoryTexture::new(
-        pixels.width as i32,
-        pixels.height as i32,
-        gdk::MemoryFormat::R8g8b8,
-        &glib::Bytes::from_owned(pixels.rgb),
-        stride,
-    );
 
     let view: FrozenView = glib::Object::new();
-    let _ = view.imp().texture.set(texture.upcast());
+    let _ = view.imp().texture.set(texture_of(pixels));
     let _ = view.imp().monitor.set(rect);
     let _ = view.imp().session.set(session.clone());
     session.views.borrow_mut().push(view.clone());
