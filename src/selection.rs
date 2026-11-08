@@ -41,6 +41,10 @@ impl Selector {
         self.pointer = self.bounds.clamp_point(p);
     }
 
+    pub fn pointer(&self) -> Point {
+        self.pointer
+    }
+
     fn monitor_under_pointer(&self) -> Option<Rect> {
         self.monitors.iter().copied().find(|m| m.contains(self.pointer))
     }
@@ -69,17 +73,21 @@ impl Selector {
 
     /// Ends a drag and leaves the result on screen to be adjusted. A click
     /// selects the monitor under it, unless a selection already exists: that
-    /// one is kept, so a stray click can't lose it.
-    pub fn release(&mut self) {
-        let Some(current) = self.selection() else { return };
-        let settled = match self.mode {
-            Mode::Idle | Mode::Settled(_) => return,
-            Mode::Drawing { previous, .. } if current.w < CLICK_SLOP && current.h < CLICK_SLOP => previous
-                .or_else(|| self.monitor_under_pointer())
-                .unwrap_or(self.bounds),
-            _ => at_least_one_pixel(current),
+    /// one is kept, so a stray click can't lose it. Returns whether this
+    /// produced a new selection, as opposed to adjusting or keeping one.
+    pub fn release(&mut self) -> bool {
+        let Some(current) = self.selection() else { return false };
+        let (settled, is_new) = match self.mode {
+            Mode::Idle | Mode::Settled(_) => return false,
+            Mode::Drawing { previous, .. } if current.w < CLICK_SLOP && current.h < CLICK_SLOP => match previous {
+                Some(rect) => (rect, false),
+                None => (self.monitor_under_pointer().unwrap_or(self.bounds), true),
+            },
+            Mode::Drawing { .. } => (at_least_one_pixel(current), true),
+            _ => (at_least_one_pixel(current), false),
         };
         self.mode = Mode::Settled(settled);
+        is_new
     }
 
     pub fn selection(&self) -> Option<Rect> {
@@ -268,6 +276,22 @@ mod tests {
         let mut s = drawn();
         drag(&mut s, (250, 350), (250, -500));
         assert_eq!(s.selection(), Some(rect(100, 0, 300, 300)));
+    }
+
+    #[test]
+    fn release_reports_only_new_selections() {
+        let mut s = selector();
+        s.set_pointer((100, 200));
+        s.press();
+        s.set_pointer((400, 500));
+        assert!(s.release());
+        s.set_pointer((250, 350));
+        s.press();
+        s.set_pointer((300, 400));
+        assert!(!s.release());
+        s.set_pointer((2000, 1000));
+        s.press();
+        assert!(!s.release());
     }
 
     #[test]

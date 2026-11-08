@@ -14,7 +14,14 @@ use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 
 use crate::geometry::{to_image_pixels, Rect};
 use crate::image::Image;
-use crate::selection::Selector;
+use crate::palette;
+use crate::render::{self, BarState, Capture};
+use crate::settings::Settings;
+use crate::workspace::{Key, Outcome, Workspace};
+
+/// Physical keys for undo and redo, so they work on non-Latin layouts too.
+const KEYCODE_Z: u32 = 52;
+const KEYCODE_Y: u32 = 29;
 
 const fn rgb(hex: u32) -> RGBA {
     let [_, r, g, b] = hex.to_be_bytes();
@@ -22,9 +29,9 @@ const fn rgb(hex: u32) -> RGBA {
 }
 
 const DIM: RGBA = RGBA::new(0.0, 0.0, 0.0, 0.4);
-const ACCENT: RGBA = rgb(0xFF4D6D);
-const SURFACE: RGBA = rgb(0x1C1216);
-const TEXT: RGBA = rgb(0xFFECEF);
+const ACCENT: RGBA = rgb(palette::ACCENT);
+const SURFACE: RGBA = rgb(palette::SURFACE);
+const TEXT: RGBA = rgb(palette::TEXT);
 const BORDER: f32 = 2.0;
 const HANDLE: f32 = 10.0;
 const HANDLE_CORE: f32 = 6.0;
@@ -34,14 +41,14 @@ pub struct Session {
     app: gtk::Application,
     bounds: Rect,
     views: RefCell<Vec<FrozenView>>,
-    selector: RefCell<Selector>,
+    workspace: RefCell<Workspace>,
     cursor: Cell<&'static str>,
     result: Cell<Option<Rect>>,
 }
 
 impl Session {
     fn selection(&self) -> Option<Rect> {
-        self.selector.borrow().selection()
+        self.workspace.borrow().selection()
     }
 
     fn redraw(&self) {
@@ -51,7 +58,7 @@ impl Session {
     }
 
     fn update_cursor(&self) {
-        let name = self.selector.borrow().cursor();
+        let name = self.workspace.borrow().cursor();
         if self.cursor.replace(name) != name {
             for view in self.views.borrow().iter() {
                 view.set_cursor_from_name(Some(name));
@@ -62,6 +69,19 @@ impl Session {
     fn refresh(&self) {
         self.redraw();
         self.update_cursor();
+    }
+
+    fn apply(&self, outcome: Outcome) {
+        match outcome {
+            Outcome::Continue => {}
+            Outcome::SaveSettings => {
+                if let Err(e) = self.workspace.borrow().settings().save() {
+                    eprintln!("cot: could not save settings: {e}");
+                }
+            }
+            Outcome::Cancel => self.finish(None),
+            Outcome::Finish(rect) => self.finish(Some(rect)),
+        }
     }
 
     fn finish(&self, result: Option<Rect>) {
@@ -121,6 +141,8 @@ mod imp {
                 snapshot.append_color(&DIM, &graphene::Rect::new(x, y, w, h));
             }
 
+            self.draw_annotations(snapshot, session, monitor, &clipped);
+
             // Unclipped, so no edge is drawn where a selection continues on
             // the next monitor. An edge flush with the screen is drawn inside,
             // as there is nowhere outside it to draw.
@@ -142,17 +164,76 @@ mod imp {
                 snapshot.append_color(&ACCENT, &graphene::Rect::new(bx, by, bw, bh));
             }
 
-            if session.selector.borrow().shows_handles() {
+            if session.workspace.borrow().shows_handles() {
                 draw_handles(snapshot, (x, y, w, h), (width, height));
             }
 
             if monitor.contains((sel.x, sel.y)) {
                 self.draw_size_label(snapshot, &sel, session, x, y);
             }
+
+            self.draw_toolbar(snapshot, session, monitor);
         }
     }
 
+    /// A cairo context for an area of this monitor, in global coordinates.
+    fn global_cairo(snapshot: &gtk::Snapshot, area: &Rect, monitor: &Rect) -> gtk::cairo::Context {
+        let local = graphene::Rect::new(
+            (area.x - monitor.x) as f32,
+            (area.y - monitor.y) as f32,
+            area.w as f32,
+            area.h as f32,
+        );
+        let cr = snapshot.append_cairo(&local);
+        cr.translate(f64::from(-monitor.x), f64::from(-monitor.y));
+        cr
+    }
+
     impl FrozenView {
+        fn draw_annotations(&self, snapshot: &gtk::Snapshot, session: &Session, monitor: &Rect, clipped: &Rect) {
+            let workspace = session.workspace.borrow();
+            let editor = workspace.editor();
+            if editor.done().is_empty() && editor.in_progress().is_none() {
+                return;
+            }
+            let cr = global_cairo(snapshot, clipped, monitor);
+            let finished = editor.done().iter().map(|shape| (shape, false));
+            let current = editor.in_progress().map(|shape| (shape, true));
+            for (shape, caret) in finished.chain(current) {
+                if let Err(e) = render::draw_shape(&cr, shape, caret) {
+                    eprintln!("cot: could not draw annotation: {e}");
+                }
+            }
+        }
+
+        fn draw_toolbar(&self, snapshot: &gtk::Snapshot, session: &Session, monitor: &Rect) {
+            let workspace = session.workspace.borrow();
+            let Some(bar) = workspace.toolbar() else { return };
+            if bar.rect.intersect(monitor).is_none() {
+                return;
+            }
+            let editor = workspace.editor();
+            let state = BarState {
+                tool: editor.tool(),
+                can_undo: editor.can_undo(),
+                can_redo: editor.can_redo(),
+                settings_open: workspace.settings_open(),
+                hover: workspace.hover(),
+                after_select: workspace.settings().after_select,
+            };
+            let cr = global_cairo(snapshot, &bar.rect, monitor);
+            if let Err(e) = render::draw_toolbar(&cr, &bar, &state) {
+                eprintln!("cot: could not draw toolbar: {e}");
+            }
+            if workspace.settings_open() {
+                let panel = bar.panel();
+                let cr = global_cairo(snapshot, &panel.rect, monitor);
+                if let Err(e) = render::draw_settings(&cr, &panel, &state) {
+                    eprintln!("cot: could not draw settings: {e}");
+                }
+            }
+        }
+
         /// Shows the size in output pixels, so it matches the saved image.
         fn draw_size_label(&self, snapshot: &gtk::Snapshot, sel: &Rect, session: &Session, x: f32, y: f32) {
             const PAD: f32 = 6.0;
@@ -216,7 +297,7 @@ glib::wrapper! {
 
 /// Shows the frozen frame and blocks until the user has chosen. Returns the
 /// region in image pixels, or `None` if they cancelled.
-pub fn select_region(frame: Rc<Image>) -> Result<Option<Rect>, String> {
+pub fn select_region(frame: Rc<Image>) -> Result<Option<Capture>, String> {
     gtk::init().map_err(|e| format!("could not initialize GTK: {e}"))?;
     let display = gdk::Display::default().ok_or("no display")?;
     let monitors: Vec<gdk::Monitor> = display
@@ -245,7 +326,7 @@ pub fn select_region(frame: Rc<Image>) -> Result<Option<Rect>, String> {
         app: app.clone(),
         bounds,
         views: RefCell::default(),
-        selector: RefCell::new(Selector::new(rects, bounds)),
+        workspace: RefCell::new(Workspace::new(rects, bounds, Settings::load())),
         cursor: Cell::new("crosshair"),
         result: Cell::new(None),
     });
@@ -264,11 +345,12 @@ pub fn select_region(frame: Rc<Image>) -> Result<Option<Rect>, String> {
     // Our arguments were already handled by clap; GTK must not see them.
     app.run_with_args::<&str>(&[]);
 
-    let scale_base = frame.width;
-    Ok(session
-        .result
-        .get()
-        .map(|rect| to_image_pixels(&rect, &bounds, scale_base)))
+    Ok(session.result.get().map(|rect| Capture {
+        region: to_image_pixels(&rect, &bounds, frame.width),
+        shapes: session.workspace.borrow().finished_shapes(),
+        bounds,
+        scale: f64::from(frame.width) / f64::from(bounds.w),
+    }))
 }
 
 fn build_window(
@@ -317,23 +399,27 @@ fn build_window(
 fn pointer_controller(monitor: Rect, session: Rc<Session>) -> EventControllerLegacy {
     let controller = EventControllerLegacy::new();
     controller.connect_event(move |_, event| {
+        let mut changed = false;
         if let Some((x, y)) = event.position() {
             let global = (monitor.x + x.round() as i32, monitor.y + y.round() as i32);
-            session.selector.borrow_mut().set_pointer(global);
+            changed = session.workspace.borrow_mut().pointer_moved(global);
         }
         let button = event.downcast_ref::<gdk::ButtonEvent>().map(|b| b.button());
         match (event.event_type(), button) {
             (gdk::EventType::ButtonPress, Some(gdk::BUTTON_PRIMARY)) => {
-                session.selector.borrow_mut().press();
+                let outcome = session.workspace.borrow_mut().press();
+                session.apply(outcome);
                 session.refresh();
             }
             (gdk::EventType::ButtonPress, Some(gdk::BUTTON_SECONDARY)) => session.finish(None),
             (gdk::EventType::ButtonRelease, Some(gdk::BUTTON_PRIMARY)) => {
-                session.selector.borrow_mut().release();
+                let shift = event.modifier_state().contains(gdk::ModifierType::SHIFT_MASK);
+                let outcome = session.workspace.borrow_mut().release(shift);
+                session.apply(outcome);
                 session.refresh();
             }
             (gdk::EventType::MotionNotify, _) => {
-                if session.selector.borrow().is_dragging() {
+                if changed {
                     session.redraw();
                 }
                 session.update_cursor();
@@ -347,16 +433,32 @@ fn pointer_controller(monitor: Rect, session: Rc<Session>) -> EventControllerLeg
 
 fn key_controller(session: Rc<Session>) -> EventControllerKey {
     let controller = EventControllerKey::new();
-    controller.connect_key_pressed(move |_, key, _, _| match key {
-        gdk::Key::Escape => {
-            session.finish(None);
-            glib::Propagation::Stop
-        }
-        gdk::Key::Return | gdk::Key::KP_Enter => {
-            session.finish(Some(session.selector.borrow().confirmed()));
-            glib::Propagation::Stop
-        }
-        _ => glib::Propagation::Proceed,
+    controller.connect_key_pressed(move |_, key, keycode, state| {
+        let ctrl = state.contains(gdk::ModifierType::CONTROL_MASK);
+        let shift = state.contains(gdk::ModifierType::SHIFT_MASK);
+        let alt = state.contains(gdk::ModifierType::ALT_MASK);
+        let input = match key {
+            gdk::Key::Escape => Key::Escape,
+            gdk::Key::Return | gdk::Key::KP_Enter => Key::Enter,
+            gdk::Key::BackSpace => Key::Backspace,
+            _ if ctrl && keycode == KEYCODE_Z => {
+                if shift {
+                    Key::Redo
+                } else {
+                    Key::Undo
+                }
+            }
+            _ if ctrl && keycode == KEYCODE_Y => Key::Redo,
+            _ if ctrl || alt => return glib::Propagation::Proceed,
+            _ => match key.to_unicode() {
+                Some(c) if !c.is_control() => Key::Char(c),
+                _ => return glib::Propagation::Proceed,
+            },
+        };
+        let outcome = session.workspace.borrow_mut().key(input);
+        session.apply(outcome);
+        session.refresh();
+        glib::Propagation::Stop
     });
     controller
 }

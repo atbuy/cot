@@ -1,7 +1,13 @@
+mod editor;
 mod geometry;
 mod image;
 mod overlay;
+mod palette;
+mod render;
 mod selection;
+mod settings;
+mod toolbar;
+mod workspace;
 
 use std::error::Error;
 use std::io::{self, ErrorKind, Write};
@@ -17,8 +23,8 @@ use crate::image::Image;
 
 /// Freezes the screen, then lets you pick what to keep.
 ///
-/// Drag to select a region, or click to select a whole monitor. Move or resize
-/// the selection with the mouse, then press Enter to copy it to the clipboard.
+/// Drag to select a region, or click to select a whole monitor. Adjust it and
+/// annotate it from the toolbar, then press Enter to copy it to the clipboard.
 /// With nothing selected, Enter takes all monitors. Esc or right-click cancels.
 #[derive(Parser)]
 #[command(version)]
@@ -75,10 +81,12 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let result = if args.full {
         frame
     } else {
-        let Some(region) = overlay::select_region(frame.clone())? else {
+        let Some(capture) = overlay::select_region(frame.clone())? else {
             return Ok(());
         };
-        Rc::new(frame.crop(&region).ok_or("the selected region is empty")?)
+        let mut cropped = frame.crop(&capture.region).ok_or("the selected region is empty")?;
+        render::flatten(&mut cropped, &capture)?;
+        Rc::new(cropped)
     };
 
     let png = result.to_png()?;
