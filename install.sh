@@ -76,10 +76,12 @@ case "${OS_ID}" in
   arch)
     DISTRO="arch"
     DEPENDENCIES="sudo pacman -S --needed grim wl-clipboard gtk4 gtk4-layer-shell"
+    TOOLS="grim wl-copy"
     ;;
   ubuntu)
     DISTRO="ubuntu-$(os_field VERSION_ID)"
-    DEPENDENCIES="sudo apt install grim wl-clipboard libgtk-4-1 libgtk4-layer-shell0"
+    DEPENDENCIES="sudo apt install xclip libgtk-4-1 libgtk4-layer-shell0"
+    TOOLS="xclip"
     ;;
   *)
     fail "There is no prebuilt release for ${OS_ID:-this system}. Build from source instead."
@@ -140,7 +142,7 @@ fi
 
 MISSING=0
 "${INSTALL_DIR}/cot" version >/dev/null 2>&1 || MISSING=1
-for tool in grim wl-copy; do
+for tool in ${TOOLS}; do
   command -v "${tool}" >/dev/null 2>&1 || MISSING=1
 done
 if [ "${MISSING}" = "1" ]; then

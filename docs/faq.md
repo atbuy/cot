@@ -30,4 +30,4 @@ Not yet. All annotations use the theme's annotation color.
 
 ## Does cot work outside Hyprland?
 
-Possibly, on other Wayland compositors with layer-shell support, but without window snapping. See [Compatibility](reference/compatibility.md).
+Possibly, on other Wayland compositors with layer-shell support, but without window snapping. See [Compatibility](reference/compatibility.md). It also runs on i3 with X11.

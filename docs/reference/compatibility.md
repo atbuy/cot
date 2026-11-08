@@ -1,13 +1,14 @@
 # Compatibility
 
-cot is developed and used on Arch Linux with Hyprland.
+cot is developed and used on Arch Linux with Hyprland, and also runs on X11 with i3.
 
 | Environment                                                                  | Status                                               |
 | ---------------------------------------------------------------------------- | ---------------------------------------------------- |
 | Hyprland                                                                     | Supported, including window snapping                 |
 | Other Wayland compositors with wlr-layer-shell and screen capture for `grim` | May work, not tested. Window snapping is unavailable |
 | GNOME and other compositors without those protocols                          | Not supported                                        |
-| X11                                                                          | Not supported                                        |
+| i3 on X11, Ubuntu 26.04                                                      | Supported, including window snapping                 |
+| Other X11 window managers                                                    | May work, not tested. Snapping needs EWMH support    |
 
 ## Monitors
 

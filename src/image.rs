@@ -3,7 +3,9 @@
 use std::error::Error;
 use std::process::{Command, Stdio};
 
+use crate::backend::Backend;
 use crate::geometry::Rect;
+use crate::x11;
 
 /// How large the effects are at a capture scale of 1, in pixels. Both are
 /// deliberately heavy, since small ones leave text guessable.
@@ -28,7 +30,10 @@ pub struct Image {
 impl Image {
     /// Captures every monitor at once. Must run before any window of ours
     /// exists: a surface under the pointer is what ends hover states.
-    pub fn capture(include_cursor: bool) -> Result<Image, Box<dyn Error>> {
+    pub fn capture(backend: Backend, include_cursor: bool) -> Result<Image, Box<dyn Error>> {
+        if backend == Backend::X11 {
+            return x11::capture(include_cursor);
+        }
         let mut grim = Command::new("grim");
         grim.args(["-t", "ppm"]);
         if include_cursor {

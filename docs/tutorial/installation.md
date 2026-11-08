@@ -1,6 +1,6 @@
 # Installation
 
-cot is developed on Arch Linux with Hyprland. See [Compatibility](../reference/compatibility.md) for what else may work.
+cot is developed on Arch Linux with Hyprland, and has prebuilt releases for Arch and for Ubuntu 26.04 with X11. See [Compatibility](../reference/compatibility.md) for what else may work.
 
 ## Install with the script
 
@@ -43,6 +43,13 @@ sudo pacman -S --needed base-devel git rust grim wl-clipboard gtk4 gtk4-layer-sh
 
 Window snapping also uses `hyprctl`, which comes with Hyprland.
 
+On Ubuntu 26.04 with X11, install these instead. `xclip` does the job of `wl-copy`, and the screen is captured without `grim`:
+
+```bash
+sudo apt install build-essential git pkg-config rustup libgtk-4-dev libgtk4-layer-shell-dev xclip
+rustup default stable
+```
+
 ### Build and install
 
 ```bash
@@ -67,12 +74,18 @@ make install PREFIX=/opt/cot
 
 ## Set up a keybind
 
-Add one line to your Hyprland config. Use the full path, because a compositor's `PATH` may not include `~/.local/bin`.
+Add one line to your window manager's config. Use the full path, because its `PATH` may not include `~/.local/bin`.
 
 === "hyprland.conf"
 
     ```ini
     bind = CONTROL, F12, exec, ~/.local/bin/cot
+    ```
+
+=== "i3 config"
+
+    ```ini
+    bindsym Control+F12 exec --no-startup-id ~/.local/bin/cot
     ```
 
 === "hyprland.lua"

@@ -1,3 +1,4 @@
+mod backend;
 mod editor;
 mod geometry;
 mod image;
@@ -12,6 +13,7 @@ mod update;
 mod version;
 mod windows;
 mod workspace;
+mod x11;
 
 use std::error::Error;
 use std::fs::{self, OpenOptions};
@@ -25,6 +27,7 @@ use std::rc::Rc;
 use clap::{Parser, Subcommand};
 use gtk::glib;
 
+use crate::backend::Backend;
 use crate::image::Image;
 use crate::settings::Config;
 use crate::workspace::Action;
@@ -88,20 +91,21 @@ fn acquire_instance_lock() -> io::Result<Option<UnixListener>> {
     }
 }
 
-fn copy_to_clipboard(png: &[u8]) -> Result<(), Box<dyn Error>> {
-    // wl-copy stays behind to serve the clipboard, so it must not inherit our
+fn copy_to_clipboard(png: &[u8], backend: Backend) -> Result<(), Box<dyn Error>> {
+    // The tool stays behind to serve the clipboard, so it must not inherit our
     // stdout: whoever is reading that pipe would never see it close.
-    let mut child = Command::new("wl-copy")
-        .args(["--type", "image/png"])
+    let (program, args) = backend.clipboard_command();
+    let mut child = Command::new(program)
+        .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|e| format!("could not run wl-copy: {e}"))?;
-    child.stdin.take().ok_or("wl-copy has no stdin")?.write_all(png)?;
+        .map_err(|e| format!("could not run {program}: {e}"))?;
+    child.stdin.take().ok_or("the clipboard tool has no stdin")?.write_all(png)?;
     let status = child.wait()?;
     if !status.success() {
-        return Err(format!("wl-copy failed: {status}").into());
+        return Err(format!("{program} failed: {status}").into());
     }
     Ok(())
 }
@@ -149,14 +153,15 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         return Ok(());
     };
 
-    let frame = Rc::new(Image::capture(args.cursor)?);
+    let backend = Backend::detect()?;
+    let frame = Rc::new(Image::capture(backend, args.cursor)?);
     let config = Config::load();
     palette::set(config.palette);
     let mut action = Action::Copy;
     let result = if args.full {
         frame
     } else {
-        let Some((capture, chosen)) = overlay::select_region(frame.clone(), config.settings)? else {
+        let Some((capture, chosen)) = overlay::select_region(frame.clone(), config.settings, backend)? else {
             return Ok(());
         };
         action = chosen;
@@ -170,7 +175,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         (Some(path), _) => {
             fs::write(&path, png).map_err(|e| format!("could not write {}: {e}", path.display()))?
         }
-        (None, Action::Copy) => copy_to_clipboard(&png)?,
+        (None, Action::Copy) => copy_to_clipboard(&png, backend)?,
         (None, Action::Save) => save_screenshot(&png, config.save_folder.as_deref())?,
     }
     Ok(())

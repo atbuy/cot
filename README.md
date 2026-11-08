@@ -5,16 +5,16 @@
 
 # cot
 
-`cot` is a screenshot tool for Wayland. It freezes the screen the moment you press the keybind, then lets you select, annotate and redact on the frozen image, so hover states and open menus stay in the screenshot.
+`cot` is a screenshot tool for Wayland and X11. It freezes the screen the moment you press the keybind, then lets you select, annotate and redact on the frozen image, so hover states and open menus stay in the screenshot.
 
 Documentation: [https://atbuy.github.io/cot/](https://atbuy.github.io/cot/)
 
 ## Quick start
 
-On Arch Linux with Hyprland:
+On Arch Linux with Hyprland, or Ubuntu 26.04 with i3:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/atbuy/cot/main/install.sh | sh
 ```
 
-Bind `~/.local/bin/cot` to a key in your Hyprland config, press it, drag across an area, and press Enter to copy it.
+Bind `~/.local/bin/cot` to a key in your window manager config, press it, drag across an area, and press Enter to copy it.

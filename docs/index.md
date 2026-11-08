@@ -4,7 +4,7 @@
 
 # cot
 
-`cot` is a screenshot tool for Wayland. It freezes your screen the moment you press the keybind, then lets you select, annotate and redact on that frozen image.
+`cot` is a screenshot tool for Wayland and X11. It freezes your screen the moment you press the keybind, then lets you select, annotate and redact on that frozen image.
 
 Because the picture is taken before any window of its own appears, hover states, open menus and tooltips stay in the screenshot.
 

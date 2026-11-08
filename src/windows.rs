@@ -1,4 +1,4 @@
-//! Which windows are on screen right now, according to Hyprland.
+//! Which windows are on screen right now, according to the window manager.
 
 use std::collections::HashSet;
 use std::process::{Command, Stdio};
@@ -6,7 +6,9 @@ use std::process::{Command, Stdio};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
+use crate::backend::Backend;
 use crate::geometry::Rect;
+use crate::x11;
 
 #[derive(Deserialize)]
 struct Workspace {
@@ -75,10 +77,16 @@ fn query<T: DeserializeOwned>(what: &str) -> Result<T, String> {
     serde_json::from_slice(&output.stdout).map_err(|e| format!("unexpected hyprctl {what} output: {e}"))
 }
 
-/// The windows on screen, topmost first. Without Hyprland's answer there is
-/// simply nothing to snap to, and dragging a selection still works.
-pub fn on_screen() -> Vec<Rect> {
-    let stack = query("clients").and_then(|clients| Ok(visible_stack(clients, &query::<Vec<Monitor>>("monitors")?)));
+/// The windows on screen, topmost first, in overlay coordinates. `scale` is
+/// image pixels per overlay coordinate. Without the window manager's answer
+/// there is simply nothing to snap to, and dragging a selection still works.
+pub fn on_screen(backend: Backend, scale: f64) -> Vec<Rect> {
+    let stack = match backend {
+        Backend::Wayland => {
+            query("clients").and_then(|clients| Ok(visible_stack(clients, &query::<Vec<Monitor>>("monitors")?)))
+        }
+        Backend::X11 => x11::window_stack(scale).map_err(|e| e.to_string()),
+    };
     stack.unwrap_or_else(|e| {
         eprintln!("cot: window snapping is off: {e}");
         Vec::new()

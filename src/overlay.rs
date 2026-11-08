@@ -1,4 +1,4 @@
-//! Fullscreen layer surfaces, one per monitor, that show the frozen frame and
+//! Fullscreen windows, one per monitor, that show the frozen frame and
 //! let the user pick a region of it.
 
 use std::cell::{Cell, OnceCell, RefCell};
@@ -12,8 +12,10 @@ use gtk::glib::{self, subclass::prelude::*};
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 use gtk::{graphene, EventControllerKey, EventControllerLegacy};
+use gdk4_x11::X11Surface;
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 
+use crate::backend::Backend;
 use crate::geometry::{to_image_pixels, Rect};
 use crate::image::{Effect, Image};
 use crate::palette;
@@ -22,6 +24,7 @@ use crate::settings::Settings;
 use crate::toolbar::Button;
 use crate::windows;
 use crate::workspace::{Action, Key, Outcome, Workspace};
+use crate::x11;
 
 /// Physical keys for shortcuts, so they work on non-Latin layouts too.
 const KEYCODE_Z: u32 = 52;
@@ -29,6 +32,7 @@ const KEYCODE_Y: u32 = 29;
 const KEYCODE_S: u32 = 39;
 const KEYCODE_C: u32 = 54;
 const TOOLTIP_DELAY: Duration = Duration::from_millis(500);
+const FOCUS_CHECK: Duration = Duration::from_millis(50);
 
 fn rgb(hex: u32) -> RGBA {
     let [_, r, g, b] = hex.to_be_bytes();
@@ -383,7 +387,7 @@ glib::wrapper! {
 
 /// Shows the frozen frame and blocks until the user has chosen. Returns the
 /// region in image pixels, or `None` if they cancelled.
-pub fn select_region(frame: Rc<Image>, settings: Settings) -> Result<Option<(Capture, Action)>, String> {
+pub fn select_region(frame: Rc<Image>, settings: Settings, backend: Backend) -> Result<Option<(Capture, Action)>, String> {
     gtk::init().map_err(|e| format!("could not initialize GTK: {e}"))?;
     let display = gdk::Display::default().ok_or("no display")?;
     let monitors: Vec<gdk::Monitor> = display
@@ -407,6 +411,12 @@ pub fn select_region(frame: Rc<Image>, settings: Settings) -> Result<Option<(Cap
         .reduce(|a, b| a.union(&b))
         .ok_or("no monitors found")?;
 
+    let x11_overlay = match backend {
+        Backend::X11 => Some(Rc::new(x11::Overlay::connect()?)),
+        Backend::Wayland => None,
+    };
+    let scale = f64::from(frame.width) / f64::from(bounds.w);
+
     let app = gtk::Application::new(Some("dev.atbuy.cot"), gio::ApplicationFlags::NON_UNIQUE);
     let session = Rc::new(Session {
         app: app.clone(),
@@ -414,7 +424,7 @@ pub fn select_region(frame: Rc<Image>, settings: Settings) -> Result<Option<(Cap
         bounds,
         effects: RefCell::default(),
         views: RefCell::default(),
-        workspace: RefCell::new(Workspace::new(rects, windows::on_screen(), bounds, settings)),
+        workspace: RefCell::new(Workspace::new(rects, windows::on_screen(backend, scale), bounds, settings)),
         cursor: Cell::new("crosshair"),
         tooltip_timer: RefCell::new(None),
         result: Cell::new(None),
@@ -424,10 +434,21 @@ pub fn select_region(frame: Rc<Image>, settings: Settings) -> Result<Option<(Cap
         let session = session.clone();
         let frame = frame.clone();
         app.connect_activate(move |app| {
+            let mut needs_focus = true;
             for monitor in &monitors {
-                if let Some(window) = build_window(app, monitor, geometry(monitor), &frame, &session) {
-                    window.present();
+                let rect = geometry(monitor);
+                let Some(window) = build_window(app, &frame, rect, &session) else {
+                    continue;
+                };
+                match &x11_overlay {
+                    None => anchor_layer_shell(&window, monitor),
+                    Some(overlay) => {
+                        // One window is enough: every key handler shares the session.
+                        make_unmanaged(&window, overlay, &physical(&rect, monitor.scale_factor()), needs_focus);
+                        needs_focus = false;
+                    }
                 }
+                window.present();
             }
         });
     }
@@ -457,11 +478,51 @@ fn texture_of(image: Image) -> gdk::Texture {
     .upcast()
 }
 
+fn physical(rect: &Rect, scale: i32) -> Rect {
+    Rect { x: rect.x * scale, y: rect.y * scale, w: rect.w * scale, h: rect.h * scale }
+}
+
+fn anchor_layer_shell(window: &gtk::ApplicationWindow, monitor: &gdk::Monitor) {
+    window.init_layer_shell();
+    window.set_namespace(Some("cot"));
+    window.set_layer(Layer::Overlay);
+    window.set_monitor(Some(monitor));
+    window.set_keyboard_mode(KeyboardMode::Exclusive);
+    window.set_exclusive_zone(-1);
+    for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
+        window.set_anchor(edge, true);
+    }
+}
+
+/// Without this a tiling window manager would place the overlay like any
+/// other window, and only on one monitor.
+fn make_unmanaged(window: &gtk::ApplicationWindow, overlay: &Rc<x11::Overlay>, rect: &Rect, takes_focus: bool) {
+    window.set_decorated(false);
+    WidgetExt::realize(window);
+    let Some(surface) = window.surface().and_downcast::<X11Surface>() else {
+        eprintln!("cot: GTK is not using X11, so the overlay may be misplaced");
+        return;
+    };
+    let xid = surface.xid() as u32;
+    if let Err(e) = overlay.make_unmanaged(xid, rect) {
+        eprintln!("cot: could not place the overlay: {e}");
+    }
+    if takes_focus {
+        let overlay = overlay.clone();
+        glib::timeout_add_local(FOCUS_CHECK, move || match overlay.hold_focus(xid) {
+            Ok(()) => glib::ControlFlow::Continue,
+            Err(e) => {
+                eprintln!("cot: could not take keyboard focus: {e}");
+                glib::ControlFlow::Break
+            }
+        });
+    }
+}
+
 fn build_window(
     app: &gtk::Application,
-    monitor: &gdk::Monitor,
-    rect: Rect,
     frame: &Image,
+    rect: Rect,
     session: &Rc<Session>,
 ) -> Option<gtk::ApplicationWindow> {
     let pixels = frame.crop(&to_image_pixels(&rect, &session.bounds, frame.width))?;
@@ -473,15 +534,7 @@ fn build_window(
     session.views.borrow_mut().push(view.clone());
 
     let window = gtk::ApplicationWindow::new(app);
-    window.init_layer_shell();
-    window.set_namespace(Some("cot"));
-    window.set_layer(Layer::Overlay);
-    window.set_monitor(Some(monitor));
-    window.set_keyboard_mode(KeyboardMode::Exclusive);
-    window.set_exclusive_zone(-1);
-    for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
-        window.set_anchor(edge, true);
-    }
+    window.set_default_size(rect.w, rect.h);
     window.set_cursor_from_name(Some("crosshair"));
     window.set_child(Some(&view));
 

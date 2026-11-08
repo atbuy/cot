@@ -2,17 +2,19 @@
 name = "cot"
 version = "0.1.0"
 edition = "2021"
-description = "Wayland screenshot tool that freezes the screen before you select a region"
+description = "Screenshot tool for Wayland and X11 that freezes the screen before you select a region"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 gtk = { package = "gtk4", version = "0.10" }
+gdk4-x11 = "0.10"
 gtk4-layer-shell = "0.7"
 pangocairo = "0.21"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml_edit = "0.22"
 png = "0.18"
+x11rb = { version = "0.13", features = ["randr", "xfixes"] }
 
 [profile.release]
 lto = "thin"
