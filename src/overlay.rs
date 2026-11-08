@@ -15,9 +15,15 @@ use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use crate::geometry::{to_image_pixels, Rect};
 use crate::image::Image;
 
+const fn rgb(hex: u32) -> RGBA {
+    let [_, r, g, b] = hex.to_be_bytes();
+    RGBA::new(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0)
+}
+
 const DIM: RGBA = RGBA::new(0.0, 0.0, 0.0, 0.4);
-const ACCENT: RGBA = RGBA::new(0.25, 0.65, 1.0, 1.0);
-const LABEL_BG: RGBA = RGBA::new(0.0, 0.0, 0.0, 0.75);
+const ACCENT: RGBA = rgb(0xFF4D6D);
+const SURFACE: RGBA = rgb(0x1C1216);
+const TEXT: RGBA = rgb(0xFFECEF);
 const BORDER: f32 = 2.0;
 /// A press and release closer together than this is a click, not a drag.
 const CLICK_SLOP: i32 = 4;
@@ -154,10 +160,10 @@ mod imp {
             let box_y = if above >= 0.0 { above } else { y + 4.0 };
             let box_x = x.max(4.0);
 
-            snapshot.append_color(&LABEL_BG, &graphene::Rect::new(box_x, box_y, box_w, box_h));
+            snapshot.append_color(&SURFACE, &graphene::Rect::new(box_x, box_y, box_w, box_h));
             snapshot.save();
             snapshot.translate(&graphene::Point::new(box_x + PAD, box_y + PAD / 2.0));
-            snapshot.append_layout(&layout, &RGBA::WHITE);
+            snapshot.append_layout(&layout, &TEXT);
             snapshot.restore();
         }
 
