@@ -1,0 +1,29 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    # cot targets Arch, so it is built against Arch's GTK and layer-shell.
+    container: archlinux:latest
+    steps:
+      - name: Install dependencies
+        # The font is for the tests that render annotation text.
+        run: pacman -Syu --noconfirm --needed base-devel git rust gtk4 gtk4-layer-shell ttf-dejavu
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Lint
+        run: cargo clippy --all-targets --locked
+
+      - name: Test
+        run: cargo test --locked

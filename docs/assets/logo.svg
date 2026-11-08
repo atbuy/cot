@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="cot">
+  <rect width="64" height="64" rx="12" fill="#1C1216"/>
+  <g fill="none" stroke="#FF4D6D" stroke-width="5" stroke-linecap="square">
+    <path d="M12 24V12H24"/>
+    <path d="M40 12H52V24"/>
+    <path d="M52 40V52H40"/>
+    <path d="M24 52H12V40"/>
+  </g>
+  <g fill="none" stroke="#4DD8FF" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M23 41 40 24"/>
+    <path d="M30 24H40V34"/>
+  </g>
+</svg>

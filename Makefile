@@ -1,7 +1,8 @@
 PREFIX ?= $(HOME)/.local
 BINDIR ?= $(PREFIX)/bin
+ZENSICAL ?= zensical
 
-.PHONY: all build install uninstall clean
+.PHONY: all build install uninstall clean docs-build docs-serve
 
 all: build
 
@@ -16,3 +17,10 @@ uninstall:
 
 clean:
 	cargo clean
+	rm -rf site
+
+docs-build:
+	$(ZENSICAL) build
+
+docs-serve:
+	$(ZENSICAL) serve
