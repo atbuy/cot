@@ -11,7 +11,8 @@ Documentation: [https://atbuy.github.io/cot/](https://atbuy.github.io/cot/)
 
 ## Quick start
 
-On Arch Linux with Hyprland, or Ubuntu 26.04 with i3:
+
+On Linux:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/atbuy/cot/main/install.sh | sh
